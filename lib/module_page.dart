@@ -1,0 +1,331 @@
+import 'package:flutter/material.dart';
+
+import 'api_service.dart';
+import 'app_shell.dart';
+import 'theme.dart';
+import 'ui_kit.dart';
+
+class ModulePage extends StatefulWidget {
+  const ModulePage({super.key, required this.moduleId});
+
+  final String moduleId;
+
+  @override
+  State<ModulePage> createState() => _ModulePageState();
+}
+
+class _ModulePageState extends State<ModulePage> {
+  late Future<ModuleItem> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = ApiService.module(widget.moduleId);
+  }
+
+  void _reload() {
+    setState(() {
+      _future = ApiService.module(widget.moduleId);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AppShell(
+      selected: 'courses',
+      body: PageBody(
+        child: FutureBuilder<ModuleItem>(
+          future: _future,
+          builder: (context, snapshot) {
+            final loaded = snapshot.connectionState == ConnectionState.done &&
+                !snapshot.hasError;
+            final fallback = loaded && snapshot.data!.courseId.isNotEmpty
+                ? '/course/${snapshot.data!.courseId}'
+                : '/courses';
+
+            Widget content;
+            if (snapshot.connectionState != ConnectionState.done) {
+              content = const LoadingBox();
+            } else if (snapshot.hasError) {
+              content = CenteredMessage(errorText(snapshot.error!), onRetry: _reload);
+            } else {
+              content = _content(snapshot.data!);
+            }
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => goBack(context, fallback),
+                    icon: const Icon(Icons.arrow_back_rounded,
+                        size: 16, color: AppColors.label),
+                    label: Text('BACK', style: AppText.sans(size: 11, color: AppColors.label)),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                content,
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _content(ModuleItem module) {
+    final handout = CardBox(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(module.courseTitle.toUpperCase(),
+              style: AppText.sans(size: 10, color: AppColors.orange)),
+          const SizedBox(height: 4),
+          Text(module.title, style: AppText.serif(size: 22, color: AppColors.title)),
+          const SizedBox(height: 12),
+          if (module.content.trim().isEmpty)
+            Text('This module has no handout text yet.',
+                style: AppText.sans(size: 12, color: Colors.black54))
+          else
+            SelectableText(
+              module.content,
+              style: AppText.sans(size: 13, color: Colors.black87).copyWith(height: 1.5),
+            ),
+        ],
+      ),
+    );
+
+    // Only students get the AI tutor panel.
+    if (Session.role != 'student') return handout;
+
+    final panel = _AiPanel(
+      key: ValueKey(module.id),
+      moduleId: module.id,
+      hasText: module.content.trim().length >= 20,
+    );
+
+    final wide = MediaQuery.of(context).size.width >= 900;
+    if (wide) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: handout),
+          const SizedBox(width: 14),
+          SizedBox(width: 330, child: panel),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [handout, const SizedBox(height: 14), panel],
+    );
+  }
+}
+
+class _AiPanel extends StatefulWidget {
+  const _AiPanel({super.key, required this.moduleId, required this.hasText});
+
+  final String moduleId;
+  final bool hasText;
+
+  @override
+  State<_AiPanel> createState() => _AiPanelState();
+}
+
+class _AiPanelState extends State<_AiPanel> {
+  // Remembers results while the app is open, so reopening a module does not call the AI again.
+  static final Map<String, AiReview> _cache = {};
+
+  bool _enabled = Session.aiTutorEnabled;
+  bool _switching = false;
+  bool _loading = false;
+  String? _error;
+  AiReview? _review;
+
+  @override
+  void initState() {
+    super.initState();
+    _review = _cache[widget.moduleId];
+    if (_enabled && widget.hasText && _review == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _generate();
+      });
+    }
+  }
+
+  Future<void> _generate({bool force = false}) async {
+    if (!force) {
+      final cached = _cache[widget.moduleId];
+      if (cached != null) {
+        setState(() => _review = cached);
+        return;
+      }
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final review = await ApiService.aiReview(widget.moduleId);
+      _cache[widget.moduleId] = review;
+      if (!mounted) return;
+      setState(() {
+        _review = review;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = errorText(e);
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _toggle(bool value) async {
+    setState(() => _switching = true);
+    try {
+      await ApiService.setAiTutor(value);
+      if (!mounted) return;
+      setState(() {
+        _enabled = value;
+        _switching = false;
+      });
+      if (value && widget.hasText && _review == null) _generate();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _switching = false);
+      showSnack(context, errorText(e));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return CardBox(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text('AI TUTOR',
+                    style: AppText.serif(size: 14, color: AppColors.title)),
+              ),
+              Switch(
+                value: _enabled,
+                onChanged: _switching ? null : _toggle,
+                activeThumbColor: Colors.white,
+                activeTrackColor: AppColors.sidebar,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          _body(),
+          if (_enabled && widget.hasText) ...[
+            const SizedBox(height: 14),
+            Text(
+              'AI notes can contain mistakes. Check them against the handout.',
+              style: AppText.sans(size: 9.5, color: Colors.black54),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _body() {
+    if (!_enabled) {
+      return Text(
+        'The AI tutor is off. Turn it on to see keywords and key statements for this module.',
+        style: AppText.sans(size: 11, color: Colors.black87),
+      );
+    }
+    if (!widget.hasText) {
+      return Text(
+        'Nothing to review yet. This module has no handout text.',
+        style: AppText.sans(size: 11, color: Colors.black87),
+      );
+    }
+    if (_loading) {
+      return Row(
+        children: [
+          const SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.sidebar),
+          ),
+          const SizedBox(width: 10),
+          Text('Reading the handout…',
+              style: AppText.sans(size: 11, color: Colors.black87)),
+        ],
+      );
+    }
+    if (_error != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(_error!, style: AppText.sans(size: 11, color: const Color(0xFFB3261E))),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: () => _generate(force: true),
+            child: Text('Try again', style: AppText.sans(size: 11, color: AppColors.label)),
+          ),
+        ],
+      );
+    }
+    final review = _review;
+    if (review == null) return const SizedBox.shrink();
+    if (review.keywords.isEmpty && review.keyStatements.isEmpty) {
+      return Text('The AI returned no notes. Try regenerating.',
+          style: AppText.sans(size: 11, color: Colors.black87));
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('KEYWORDS', style: AppText.sans(size: 10.5, color: AppColors.label)),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final k in review.keywords)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.sidebar,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(k,
+                    style: AppText.sans(
+                        size: 10, color: Colors.white, weight: FontWeight.w600)),
+              ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Text('KEY STATEMENTS', style: AppText.sans(size: 10.5, color: AppColors.label)),
+        const SizedBox(height: 6),
+        for (final s in review.keyStatements)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('•  ', style: AppText.sans(size: 11, color: AppColors.orange)),
+                Expanded(
+                  child: Text(s, style: AppText.sans(size: 11, color: Colors.black87)),
+                ),
+              ],
+            ),
+          ),
+        TextButton.icon(
+          onPressed: () => _generate(force: true),
+          icon: const Icon(Icons.refresh_rounded, size: 16, color: AppColors.label),
+          label: Text('Regenerate', style: AppText.sans(size: 11, color: AppColors.label)),
+        ),
+      ],
+    );
+  }
+}

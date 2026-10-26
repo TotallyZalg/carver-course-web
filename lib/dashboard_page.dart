@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import 'app_shell.dart';
 import 'theme.dart';
 
 class DashboardPage extends StatelessWidget {
@@ -6,99 +8,7 @@ class DashboardPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.darkBrown,
-      body: Column(
-        children: [
-          _TopBar(onSignOut: () => Navigator.pushReplacementNamed(context, '/')),
-          Expanded(
-            child: Row(
-              children: [
-                const _Sidebar(),
-                Expanded(child: _MainArea()),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TopBar extends StatelessWidget {
-  const _TopBar({required this.onSignOut});
-  final VoidCallback onSignOut;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 52,
-      color: AppColors.darkBrown,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        children: [
-          Text('CARVER - COURSE',
-              style: AppText.serif(size: 20, color: AppColors.cream, spacing: 0.5)),
-          const Spacer(),
-          SizedBox(
-            height: 26,
-            child: FilledButton(
-              onPressed: onSignOut,
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.orange,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-              ),
-              child: Text('Sign Out', style: AppText.sans(size: 11, color: Colors.white)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Sidebar extends StatelessWidget {
-  const _Sidebar();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 90,
-      color: AppColors.sidebar,
-      padding: const EdgeInsets.only(top: 16),
-      child: const Column(
-        children: [
-          _NavItem(icon: Icons.menu_book_rounded, label: 'COURSES', selected: true),
-          _NavItem(icon: Icons.smart_toy_rounded, label: 'AI'),
-          _NavItem(icon: Icons.help_outline_rounded, label: 'QUIZ', iconColor: Color(0xFFE53935)),
-        ],
-      ),
-    );
-  }
-}
-
-class _NavItem extends StatelessWidget {
-  const _NavItem({required this.icon, required this.label, this.selected = false, this.iconColor});
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final Color? iconColor;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
-      child: Column(
-        children: [
-          Icon(icon, size: 34, color: iconColor ?? const Color(0xFFE8C9A0)),
-          const SizedBox(height: 4),
-          Text(label,
-              style: AppText.sans(
-                  size: 9.5, color: selected ? const Color(0xFFFFD58A) : AppColors.cream)),
-        ],
-      ),
-    );
+    return AppShell(selected: 'home', body: _MainArea());
   }
 }
 
@@ -373,6 +283,6 @@ class _Chip extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
       ),
       child: Text(text, style: AppText.sans(size: 8, color: Colors.white, weight: FontWeight.w600)),
-    ); 
+    );
   }
 }
