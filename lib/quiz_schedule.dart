@@ -209,3 +209,13 @@ class _ScheduleDialogState extends State<ScheduleDialog> {
     );
   }
 }
+
+/// The four kinds of graded work: tag value -> label.
+const Map<String, String> quizKinds = {
+  'quiz': 'Quiz',
+  'activity': 'Activity',
+  'minitask': 'Minitask',
+  'task_performance': 'Task performance',
+};
+
+String kindLabel(String kind) => quizKinds[kind] ?? 'Quiz';

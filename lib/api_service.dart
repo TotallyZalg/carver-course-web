@@ -166,6 +166,8 @@ class ModuleItem {
     this.content = '',
     this.courseId = '',
     this.courseTitle = '',
+    this.fileId,
+    this.fileName,
   });
 
   final String id;
@@ -174,6 +176,8 @@ class ModuleItem {
   final String content;
   final String courseId;
   final String courseTitle;
+  final String? fileId; // attached PDF
+  final String? fileName;
 
   factory ModuleItem.fromJson(Map<String, dynamic> j) => ModuleItem(
         id: (j['id'] ?? j['_id'] ?? '').toString(),
@@ -182,6 +186,8 @@ class ModuleItem {
         content: (j['content'] ?? '').toString(),
         courseId: (j['courseId'] ?? '').toString(),
         courseTitle: (j['courseTitle'] ?? '').toString(),
+        fileId: j['fileId'] as String?,
+        fileName: j['fileName'] as String?,
       );
 }
 
@@ -514,9 +520,14 @@ class ChapterItem {
     this.maxAttempts = 1,
     this.attemptsUsed = 0,
     this.attemptsLeft = 1,
+    this.fileId,
+    this.fileName,
+    this.kind = 'quiz',
+    this.postedByRole,
+    this.postedByName,
   });
 
-  final String type; // 'module' or 'quiz'
+  final String type; // 'module' or 'quiz' (quizzes, activities, minitasks and task performances)
   final String id;
   final String title;
   final bool published; // quizzes, instructor/admin view
@@ -532,6 +543,11 @@ class ChapterItem {
   final int maxAttempts;
   final int attemptsUsed; // student view
   final int attemptsLeft; // student view
+  final String? fileId; // attached PDF (modules and quizzes)
+  final String? fileName;
+  final String kind; // 'quiz', 'activity', 'minitask' or 'task_performance'
+  final String? postedByRole; // 'admin' or 'instructor'
+  final String? postedByName;
 
   bool get isModule => type == 'module';
 
@@ -552,6 +568,11 @@ class ChapterItem {
         maxAttempts: (j['maxAttempts'] as num?)?.toInt() ?? 1,
         attemptsUsed: (j['attemptsUsed'] as num?)?.toInt() ?? 0,
         attemptsLeft: (j['attemptsLeft'] as num?)?.toInt() ?? 1,
+        fileId: j['fileId'] as String?,
+        fileName: j['fileName'] as String?,
+        kind: (j['kind'] ?? 'quiz').toString(),
+        postedByRole: j['postedByRole'] as String?,
+        postedByName: j['postedByName'] as String?,
       );
 }
 
@@ -589,19 +610,23 @@ class ChapterApi {
     await ApiService._request('DELETE', '/chapters/$id');
   }
 
-  static Future<void> createModule(
+  /// Returns the id of the new module.
+  static Future<String> createModule(
     String courseId, {
     required String chapterId,
     required String title,
     required String content,
   }) async {
-    await ApiService._request('POST', '/courses/$courseId/modules',
-        body: {'title': title, 'content': content, 'chapterId': chapterId});
+    final data = await ApiService._request('POST', '/courses/$courseId/modules',
+        body: {'title': title, 'content': content, 'chapterId': chapterId}) as Map<String, dynamic>;
+    return (data['id'] ?? '').toString();
   }
 
-  static Future<void> createQuiz(
+  /// Returns the id of the new quiz/activity/minitask/task performance.
+  static Future<String> createQuiz(
     String courseId, {
     String? chapterId,
+    String kind = 'quiz',
     required String title,
     required List<Map<String, dynamic>> questions,
     bool published = false,
@@ -609,15 +634,17 @@ class ChapterApi {
     DateTime? dueAt,
     int maxAttempts = 1,
   }) async {
-    await ApiService._request('POST', '/quizzes/course/$courseId', body: {
+    final data = await ApiService._request('POST', '/quizzes/course/$courseId', body: {
       'title': title,
+      'kind': kind,
       'questions': questions,
       'published': published,
       'maxAttempts': maxAttempts,
       'opensAt': opensAt?.toUtc().toIso8601String(),
       'dueAt': dueAt?.toUtc().toIso8601String(),
       'chapterId': ?chapterId,
-    });
+    }) as Map<String, dynamic>;
+    return (data['id'] ?? '').toString();
   }
 
   /// A null date clears it (open right away / no deadline).
@@ -642,5 +669,51 @@ class CourseAdminApi {
   static Future<void> setInstructor(String courseId, String instructorId) async {
     await ApiService._request('PATCH', '/courses/$courseId/instructor',
         body: {'instructorId': instructorId});
+  }
+}
+
+// ---------- PDF files ----------
+
+class FileApi {
+  /// kind is 'module' or 'quiz'. The PDF bytes are sent as they are (not as JSON).
+  static Future<void> upload(String kind, String ownerId, String name, List<int> bytes) async {
+    final uri = Uri.parse(
+        '${ApiService.baseUrl}/files/$kind/$ownerId?name=${Uri.encodeQueryComponent(name)}');
+    final request = http.Request('POST', uri);
+    request.headers['Content-Type'] = 'application/pdf';
+    if (Session.token != null) request.headers['Authorization'] = 'Bearer ${Session.token}';
+    request.bodyBytes = bytes;
+
+    http.Response res;
+    try {
+      final streamed = await request.send().timeout(const Duration(seconds: 60));
+      res = await http.Response.fromStream(streamed);
+    } catch (_) {
+      throw ApiException("Can't reach the server. Is the backend running?");
+    }
+    if (res.statusCode >= 200 && res.statusCode < 300) return;
+
+    var message = 'Upload failed (${res.statusCode}).';
+    try {
+      final data = jsonDecode(res.body);
+      if (data is Map && data['error'] is String) message = data['error'] as String;
+    } catch (_) {}
+
+    if (res.statusCode == 401) {
+      Session.clear();
+      navigatorKey.currentState?.pushNamedAndRemoveUntil('/', (_) => false);
+      throw ApiException(message, unauthorized: true);
+    }
+    throw ApiException(message);
+  }
+
+  /// A link to the PDF that works for 2 minutes.
+  static Future<String> link(String fileId) async {
+    final data = await ApiService._request('POST', '/files/$fileId/link') as Map<String, dynamic>;
+    return data['url'] as String;
+  }
+
+  static Future<void> remove(String kind, String ownerId) async {
+    await ApiService._request('DELETE', '/files/$kind/$ownerId');
   }
 }

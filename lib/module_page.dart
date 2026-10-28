@@ -5,6 +5,8 @@ import 'app_shell.dart';
 import 'theme.dart';
 import 'ui_kit.dart';
 
+import 'pdf_actions.dart';
+
 class ModulePage extends StatefulWidget {
   const ModulePage({super.key, required this.moduleId});
 
@@ -84,9 +86,24 @@ class _ModulePageState extends State<ModulePage> {
               style: AppText.sans(size: 10, color: AppColors.orange)),
           const SizedBox(height: 4),
           Text(module.title, style: AppText.serif(size: 22, color: AppColors.title)),
+          if (module.fileId != null) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: () => openPdf(context, module.fileId!),
+                icon: const Icon(Icons.picture_as_pdf_outlined,
+                    size: 18, color: AppColors.label),
+                label: Text(module.fileName ?? 'Open PDF',
+                    style: AppText.sans(size: 11, color: AppColors.label)),
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           if (module.content.trim().isEmpty)
-            Text('This module has no handout text yet.',
+            Text(module.fileId != null
+                ? 'The handout for this module is the attached PDF.'
+                : 'This module has no handout text yet.',
                 style: AppText.sans(size: 12, color: Colors.black54))
           else
             SelectableText(

@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 
 import 'api_service.dart';
 import 'app_shell.dart';
+import 'pdf_actions.dart';
+import 'quiz_schedule.dart';
 import 'theme.dart';
 import 'ui_kit.dart';
-
-import 'quiz_schedule.dart';
 
 /// One question being typed in the builder.
 class _QuestionDraft {
@@ -20,7 +20,7 @@ class _QuestionDraft {
 }
 
 class QuizEditorPage extends StatefulWidget {
-    const QuizEditorPage({super.key, required this.courseId, this.chapterId});
+  const QuizEditorPage({super.key, required this.courseId, this.chapterId});
 
   final String courseId;
   final String? chapterId;
@@ -33,6 +33,8 @@ class _QuizEditorPageState extends State<QuizEditorPage> {
   final _title = TextEditingController();
   final List<_QuestionDraft> _questions = [_QuestionDraft()];
   final QuizSchedule _schedule = QuizSchedule();
+  String _kind = 'quiz';
+  PickedPdf? _pdf;
   // Controllers of removed questions/choices. They are disposed together at the end,
   // because disposing one while its text field is still on screen causes errors.
   final List<TextEditingController> _trash = [];
@@ -79,10 +81,15 @@ class _QuizEditorPageState extends State<QuizEditorPage> {
     });
   }
 
+  Future<void> _choosePdf() async {
+    final pdf = await pickPdf(context);
+    if (pdf != null && mounted) setState(() => _pdf = pdf);
+  }
+
   Future<void> _save({required bool publish}) async {
     final title = _title.text.trim();
     if (title.isEmpty) {
-      setState(() => _error = 'Enter a quiz title.');
+      setState(() => _error = 'Enter a title.');
       return;
     }
 
@@ -121,7 +128,7 @@ class _QuizEditorPageState extends State<QuizEditorPage> {
       });
     }
 
-        final scheduleProblem = _schedule.check();
+    final scheduleProblem = _schedule.check();
     if (scheduleProblem != null) {
       setState(() => _error = scheduleProblem);
       return;
@@ -132,9 +139,10 @@ class _QuizEditorPageState extends State<QuizEditorPage> {
       _error = null;
     });
     try {
-            await ChapterApi.createQuiz(
+      final quizId = await ChapterApi.createQuiz(
         widget.courseId,
         chapterId: widget.chapterId,
+        kind: _kind,
         title: title,
         questions: questions,
         published: publish,
@@ -142,8 +150,22 @@ class _QuizEditorPageState extends State<QuizEditorPage> {
         dueAt: _schedule.dueAt,
         maxAttempts: _schedule.maxAttempts,
       );
+
+      var message = publish
+          ? '${kindLabel(_kind)} published.'
+          : '${kindLabel(_kind)} saved as a draft.';
+
+      // The PDF goes up after the item exists. If it fails, the item is still saved.
+      if (_pdf != null) {
+        try {
+          await FileApi.upload('quiz', quizId, _pdf!.name, _pdf!.bytes);
+        } catch (e) {
+          message = '$message The PDF did not upload (${errorText(e)}). You can add it later from the menu.';
+        }
+      }
+
       if (!mounted) return;
-      showSnack(context, publish ? 'Quiz published.' : 'Quiz saved as a draft.');
+      showSnack(context, message);
       goBack(context, '/course/${widget.courseId}');
     } catch (e) {
       if (!mounted) return;
@@ -178,15 +200,53 @@ class _QuizEditorPageState extends State<QuizEditorPage> {
                 label: Text('COURSE', style: AppText.sans(size: 11, color: AppColors.label)),
               ),
             ),
-            pageTitle('NEW QUIZ'),
+            pageTitle('NEW QUIZ / ACTIVITY'),
             const SizedBox(height: 10),
             CardBox(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  fieldLabel('QUIZ TITLE'),
+                  fieldLabel('TYPE'),
+                  SizedBox(
+                    width: 260,
+                    child: SelectBox<String>(
+                      value: _kind,
+                      items: [
+                        for (final e in quizKinds.entries)
+                          DropdownMenuItem(value: e.key, child: Text(e.value)),
+                      ],
+                      onChanged: (v) => setState(() => _kind = v),
+                    ),
+                  ),
+                  fieldLabel('TITLE'),
                   inputField(_title, 'e.g. Quiz 1 - Introduction'),
+                  fieldLabel('INSTRUCTIONS PDF (OPTIONAL)'),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(
+                        _pdf?.name ?? 'No file attached',
+                        style: AppText.sans(
+                          size: 12,
+                          color: _pdf == null ? Colors.black54 : AppColors.darkBrown,
+                        ),
+                      ),
+                      OutlinedButton(
+                        onPressed: _saving ? null : _choosePdf,
+                        child: Text(_pdf == null ? 'Attach PDF' : 'Change',
+                            style: AppText.sans(size: 11, color: AppColors.label)),
+                      ),
+                      if (_pdf != null)
+                        TextButton(
+                          onPressed: _saving ? null : () => setState(() => _pdf = null),
+                          child: Text('Remove',
+                              style: AppText.sans(size: 11, color: AppColors.label)),
+                        ),
+                    ],
+                  ),
                 ],
               ),
             ),

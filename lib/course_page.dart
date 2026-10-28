@@ -7,6 +7,8 @@ import 'ui_kit.dart';
 
 import 'quiz_schedule.dart';
 
+import 'pdf_actions.dart';
+
 class _CourseData {
   _CourseData(this.course, this.chapters);
   final Course course;
@@ -104,12 +106,12 @@ class _CoursePageState extends State<CoursePage> {
   // ----- modules and quizzes -----
 
   Future<void> _addModule(ChapterOutline chapter) async {
-    final created = await showDialog<bool>(
+    final result = await showDialog<String>(
       context: context,
       builder: (_) => _AddModuleDialog(courseId: widget.courseId, chapterId: chapter.id),
     );
-    if (created != true || !mounted) return;
-    showSnack(context, 'Module added.');
+    if (result == null || !mounted) return;
+    showSnack(context, result.isEmpty ? 'Module added.' : result);
     _reload();
   }
 
@@ -154,6 +156,29 @@ class _CoursePageState extends State<CoursePage> {
         maxAttempts: result.maxAttempts,
       ),
       done: 'Schedule updated.',
+    );
+  }
+
+    Future<void> _uploadPdf(ChapterItem item) async {
+    final ok = await pickAndUploadPdf(
+      context,
+      kind: item.isModule ? 'module' : 'quiz',
+      ownerId: item.id,
+    );
+    if (ok && mounted) _reload();
+  }
+
+  Future<void> _removePdf(ChapterItem item) async {
+    final ok = await confirmDialog(
+      context,
+      title: 'Remove PDF',
+      message: 'Remove "${item.fileName}" from "${item.title}"?',
+      confirmLabel: 'Remove',
+    );
+    if (!ok) return;
+    await _run(
+      () => FileApi.remove(item.isModule ? 'module' : 'quiz', item.id),
+      done: 'PDF removed.',
     );
   }
 
@@ -389,7 +414,7 @@ class _CoursePageState extends State<CoursePage> {
                 OutlinedButton.icon(
                   onPressed: () => _newQuiz(chapter),
                   icon: const Icon(Icons.add_rounded, size: 16, color: AppColors.label),
-                  label: Text('NEW QUIZ',
+                  label: Text('NEW QUIZ / ACTIVITY',
                       style: AppText.sans(size: 10.5, color: AppColors.label)),
                 ),
               ],
@@ -401,6 +426,7 @@ class _CoursePageState extends State<CoursePage> {
   }
 
   Widget _moduleRow(ChapterItem item) {
+    final hasFile = item.fileId != null;
     return InkWell(
       onTap: () => Navigator.pushNamed(context, '/module/${item.id}'),
       child: Padding(
@@ -410,14 +436,41 @@ class _CoursePageState extends State<CoursePage> {
             const Icon(Icons.description_outlined, size: 18, color: AppColors.label),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(item.title, style: AppText.sans(size: 13, color: Colors.black87)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(item.title, style: AppText.sans(size: 13, color: Colors.black87)),
+                  if (hasFile)
+                    Text('PDF: ${item.fileName}',
+                        overflow: TextOverflow.ellipsis,
+                        style: AppText.sans(size: 10, color: AppColors.orange)),
+                ],
+              ),
             ),
-            if (_isAdmin)
+            if (hasFile)
               IconButton(
-                tooltip: 'Delete module',
+                tooltip: 'Open PDF',
                 iconSize: 18,
-                onPressed: () => _deleteModule(item),
-                icon: const Icon(Icons.delete_outline_rounded, color: AppColors.label),
+                onPressed: () => openPdf(context, item.fileId!),
+                icon: const Icon(Icons.picture_as_pdf_outlined, color: AppColors.label),
+              ),
+            if (_isAdmin)
+              PopupMenuButton<String>(
+                tooltip: 'Module options',
+                icon: const Icon(Icons.more_vert_rounded, size: 18, color: AppColors.label),
+                onSelected: (value) {
+                  if (value == 'upload') _uploadPdf(item);
+                  if (value == 'removePdf') _removePdf(item);
+                  if (value == 'delete') _deleteModule(item);
+                },
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: 'upload',
+                    child: Text(hasFile ? 'Replace PDF' : 'Upload PDF'),
+                  ),
+                  if (hasFile) const PopupMenuItem(value: 'removePdf', child: Text('Remove PDF')),
+                  const PopupMenuItem(value: 'delete', child: Text('Delete module')),
+                ],
               )
             else
               const Icon(Icons.chevron_right_rounded, color: AppColors.label),
@@ -438,6 +491,26 @@ class _CoursePageState extends State<CoursePage> {
       default:
         return 'DRAFT';
     }
+  }
+
+  String _postedBy(ChapterItem item) {
+    if (item.postedByRole == 'admin') return 'ADMIN';
+    if (item.postedByRole == 'instructor') return 'INSTRUCTOR';
+    return '';
+  }
+
+  Widget _kindTag(String kind) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppColors.sidebar,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        kindLabel(kind).toUpperCase(),
+        style: AppText.sans(size: 8.5, color: Colors.white),
+      ),
+    );
   }
 
   Widget _quizRow(ChapterItem item) {
@@ -468,10 +541,18 @@ class _CoursePageState extends State<CoursePage> {
       progress += ' · ${item.attemptsUsed}/${item.maxAttempts} tries used';
     }
 
+    // Students can only open the PDF once the quiz is open (the server enforces this too)
+    final hasFile = item.fileId != null;
+    final canOpenFile = hasFile && (_isStaff || item.state == 'open' || item.state == 'closed');
+    final by = _postedBy(item);
+
     return InkWell(
       onTap: _isStaff
           ? null
-          : () => showSnack(context, 'Taking quizzes opens in the next update.'),
+          : () async {
+              await Navigator.pushNamed(context, '/quiz/${item.id}');
+              if (mounted) _reload();
+            },
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Row(
@@ -482,22 +563,49 @@ class _CoursePageState extends State<CoursePage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(item.title, style: AppText.sans(size: 13, color: Colors.black87)),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(item.title, style: AppText.sans(size: 13, color: Colors.black87)),
+                      _kindTag(item.kind),
+                    ],
+                  ),
                   Text('$questions · $progress',
                       style: AppText.sans(size: 10, color: AppColors.label)),
                   Text(schedule, style: AppText.sans(size: 10, color: AppColors.orange)),
+                  if (canOpenFile)
+                    Text('PDF: ${item.fileName}',
+                        overflow: TextOverflow.ellipsis,
+                        style: AppText.sans(size: 10, color: AppColors.orange)),
                 ],
               ),
             ),
+            if (canOpenFile)
+              IconButton(
+                tooltip: 'Open PDF',
+                iconSize: 18,
+                onPressed: () => openPdf(context, item.fileId!),
+                icon: const Icon(Icons.picture_as_pdf_outlined, color: AppColors.label),
+              ),
+            if (by.isNotEmpty)
+              Tooltip(
+                message: item.postedByName ?? by,
+                child: _tag('POSTED BY $by', filled: false),
+              ),
             if (_isStaff) ...[
+              const SizedBox(width: 6),
               _tag(_stateLabel(item.state),
                   filled: item.state == 'open' || item.state == 'upcoming'),
               PopupMenuButton<String>(
-                tooltip: 'Quiz options',
+                tooltip: 'Options',
                 icon: const Icon(Icons.more_vert_rounded, size: 18, color: AppColors.label),
                 onSelected: (value) {
                   if (value == 'toggle') _toggleQuiz(item);
                   if (value == 'schedule') _editSchedule(item);
+                  if (value == 'upload') _uploadPdf(item);
+                  if (value == 'removePdf') _removePdf(item);
                   if (value == 'delete') _deleteQuiz(item);
                 },
                 itemBuilder: (_) => [
@@ -506,6 +614,11 @@ class _CoursePageState extends State<CoursePage> {
                     child: Text(item.published ? 'Unpublish' : 'Publish'),
                   ),
                   const PopupMenuItem(value: 'schedule', child: Text('Edit schedule')),
+                  PopupMenuItem(
+                    value: 'upload',
+                    child: Text(hasFile ? 'Replace PDF' : 'Upload PDF'),
+                  ),
+                  if (hasFile) const PopupMenuItem(value: 'removePdf', child: Text('Remove PDF')),
                   const PopupMenuItem(value: 'delete', child: Text('Delete')),
                 ],
               ),
@@ -657,6 +770,7 @@ class _AddModuleDialog extends StatefulWidget {
 class _AddModuleDialogState extends State<_AddModuleDialog> {
   final _title = TextEditingController();
   final _content = TextEditingController();
+  PickedPdf? _pdf;
   bool _busy = false;
   String? _error;
 
@@ -665,6 +779,11 @@ class _AddModuleDialogState extends State<_AddModuleDialog> {
     _title.dispose();
     _content.dispose();
     super.dispose();
+  }
+
+  Future<void> _choosePdf() async {
+    final pdf = await pickPdf(context);
+    if (pdf != null && mounted) setState(() => _pdf = pdf);
   }
 
   Future<void> _create() async {
@@ -678,14 +797,26 @@ class _AddModuleDialogState extends State<_AddModuleDialog> {
       _error = null;
     });
     try {
-      await ChapterApi.createModule(
+      final moduleId = await ChapterApi.createModule(
         widget.courseId,
         chapterId: widget.chapterId,
         title: title,
         content: _content.text,
       );
+
+      // The PDF goes up after the module exists. If it fails, the module is still saved.
+      var message = '';
+      if (_pdf != null) {
+        try {
+          await FileApi.upload('module', moduleId, _pdf!.name, _pdf!.bytes);
+        } catch (e) {
+          message =
+              'Module added, but the PDF did not upload (${errorText(e)}). You can add it from the module menu.';
+        }
+      }
+
       if (!mounted) return;
-      Navigator.pop(context, true);
+      Navigator.pop(context, message);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -709,7 +840,32 @@ class _AddModuleDialogState extends State<_AddModuleDialog> {
             children: [
               fieldLabel('TITLE'),
               inputField(_title, 'Module title'),
-              fieldLabel('HANDOUT TEXT'),
+              fieldLabel('HANDOUT PDF (OPTIONAL)'),
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                    _pdf?.name ?? 'No file attached',
+                    style: AppText.sans(
+                      size: 12,
+                      color: _pdf == null ? Colors.black54 : AppColors.darkBrown,
+                    ),
+                  ),
+                  OutlinedButton(
+                    onPressed: _busy ? null : _choosePdf,
+                    child: Text(_pdf == null ? 'Attach PDF' : 'Change',
+                        style: AppText.sans(size: 11, color: AppColors.label)),
+                  ),
+                  if (_pdf != null)
+                    TextButton(
+                      onPressed: _busy ? null : () => setState(() => _pdf = null),
+                      child: Text('Remove', style: AppText.sans(size: 11, color: AppColors.label)),
+                    ),
+                ],
+              ),
+              fieldLabel('HANDOUT TEXT / DESCRIPTION (OPTIONAL)'),
               inputField(_content, 'Paste the handout text here', minLines: 6, maxLines: 12),
               if (_error != null) ...[
                 const SizedBox(height: 12),
@@ -721,7 +877,7 @@ class _AddModuleDialogState extends State<_AddModuleDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: _busy ? null : () => Navigator.pop(context, false),
+          onPressed: _busy ? null : () => Navigator.pop(context),
           child: Text('Cancel', style: AppText.sans(size: 11, color: AppColors.label)),
         ),
         primaryButton(label: 'ADD', onPressed: _create, loading: _busy),
@@ -729,6 +885,7 @@ class _AddModuleDialogState extends State<_AddModuleDialog> {
     );
   }
 }
+
 class _InstructorDialog extends StatefulWidget {
   const _InstructorDialog({required this.currentId});
 
