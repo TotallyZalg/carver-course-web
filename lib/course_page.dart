@@ -526,6 +526,7 @@ class _CoursePageState extends State<CoursePage> {
     String progress;
     if (_isStaff) {
       progress = '${item.submissionCount} student${item.submissionCount == 1 ? '' : 's'} submitted';
+      if (item.needsGrading > 0) progress += ' · ${item.needsGrading} to grade';
     } else if (item.status == 'graded') {
       progress = 'Score ${item.score}/${item.totalPoints}';
     } else if (item.status == 'submitted') {
@@ -547,12 +548,14 @@ class _CoursePageState extends State<CoursePage> {
     final by = _postedBy(item);
 
     return InkWell(
-      onTap: _isStaff
-          ? null
-          : () async {
-              await Navigator.pushNamed(context, '/quiz/${item.id}');
-              if (mounted) _reload();
-            },
+      onTap: () async {
+        // instructors and admins review submissions, students take the quiz
+        await Navigator.pushNamed(
+          context,
+          _isStaff ? '/quiz-review/${item.id}' : '/quiz/${item.id}',
+        );
+        if (mounted) _reload();
+      },
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Row(

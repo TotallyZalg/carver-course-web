@@ -192,12 +192,14 @@ class ModuleItem {
 }
 
 class AiReview {
-  AiReview({required this.keywords, required this.keyStatements});
+  AiReview({required this.summary, required this.keywords, required this.keyStatements});
 
+  final String summary;
   final List<String> keywords;
   final List<String> keyStatements;
 
   factory AiReview.fromJson(Map<String, dynamic> j) => AiReview(
+        summary: (j['summary'] ?? '').toString(),
         keywords: ((j['keywords'] as List?) ?? []).map((e) => e.toString()).toList(),
         keyStatements: ((j['keyStatements'] as List?) ?? []).map((e) => e.toString()).toList(),
       );
@@ -525,6 +527,7 @@ class ChapterItem {
     this.kind = 'quiz',
     this.postedByRole,
     this.postedByName,
+    this.needsGrading = 0,
   });
 
   final String type; // 'module' or 'quiz' (quizzes, activities, minitasks and task performances)
@@ -548,6 +551,7 @@ class ChapterItem {
   final String kind; // 'quiz', 'activity', 'minitask' or 'task_performance'
   final String? postedByRole; // 'admin' or 'instructor'
   final String? postedByName;
+  final int needsGrading; // quizzes: tries waiting for hand grading (instructor/admin view)
 
   bool get isModule => type == 'module';
 
@@ -573,6 +577,7 @@ class ChapterItem {
         kind: (j['kind'] ?? 'quiz').toString(),
         postedByRole: j['postedByRole'] as String?,
         postedByName: j['postedByName'] as String?,
+        needsGrading: (j['needsGrading'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -715,5 +720,404 @@ class FileApi {
 
   static Future<void> remove(String kind, String ownerId) async {
     await ApiService._request('DELETE', '/files/$kind/$ownerId');
+  }
+}
+
+// ---------- Taking quizzes (students) ----------
+
+class QuizQuestion {
+  QuizQuestion({
+    required this.id,
+    required this.type,
+    required this.text,
+    required this.choices,
+    required this.points,
+  });
+
+  final String id;
+  final String type; // 'mcq' or 'text'
+  final String text;
+  final List<String> choices;
+  final int points;
+
+  bool get isChoice => type == 'mcq';
+
+  factory QuizQuestion.fromJson(Map<String, dynamic> j) => QuizQuestion(
+        id: (j['id'] ?? '').toString(),
+        type: (j['type'] ?? 'mcq').toString(),
+        text: (j['text'] ?? '').toString(),
+        choices: ((j['choices'] as List?) ?? []).map((c) => c.toString()).toList(),
+        points: (j['points'] as num?)?.toInt() ?? 1,
+      );
+}
+
+/// A quiz as a student sees it. The questions are only filled in when [canTake] is true.
+class QuizTake {
+  QuizTake({
+    required this.id,
+    required this.courseId,
+    required this.title,
+    required this.totalPoints,
+    required this.state,
+    required this.opensAt,
+    required this.dueAt,
+    required this.maxAttempts,
+    required this.attemptsUsed,
+    required this.attemptsLeft,
+    required this.canTake,
+    required this.status,
+    required this.score,
+    required this.questions,
+    required this.fileId,
+    required this.fileName,
+  });
+
+  final String id;
+  final String courseId;
+  final String title;
+  final int totalPoints;
+  final String state; // 'upcoming', 'open' or 'closed'
+  final DateTime? opensAt;
+  final DateTime? dueAt;
+  final int maxAttempts;
+  final int attemptsUsed;
+  final int attemptsLeft;
+  final bool canTake;
+  final String? status;
+  final int? score;
+  final List<QuizQuestion> questions;
+  final String? fileId;
+  final String? fileName;
+
+  factory QuizTake.fromJson(Map<String, dynamic> j) => QuizTake(
+        id: (j['id'] ?? '').toString(),
+        courseId: (j['courseId'] ?? '').toString(),
+        title: (j['title'] ?? '').toString(),
+        totalPoints: (j['totalPoints'] as num?)?.toInt() ?? 0,
+        state: (j['state'] ?? '').toString(),
+        opensAt: DateTime.tryParse((j['opensAt'] ?? '').toString())?.toLocal(),
+        dueAt: DateTime.tryParse((j['dueAt'] ?? '').toString())?.toLocal(),
+        maxAttempts: (j['maxAttempts'] as num?)?.toInt() ?? 1,
+        attemptsUsed: (j['attemptsUsed'] as num?)?.toInt() ?? 0,
+        attemptsLeft: (j['attemptsLeft'] as num?)?.toInt() ?? 0,
+        canTake: j['canTake'] as bool? ?? false,
+        status: j['status'] as String?,
+        score: (j['score'] as num?)?.toInt(),
+        questions: ((j['questions'] as List?) ?? [])
+            .map((q) => QuizQuestion.fromJson(q as Map<String, dynamic>))
+            .toList(),
+        fileId: j['fileId'] as String?,
+        fileName: j['fileName'] as String?,
+      );
+}
+
+class AttemptInfo {
+  AttemptInfo({required this.attempt, required this.status, required this.score});
+
+  final int attempt;
+  final String status; // 'submitted' or 'graded'
+  final int score;
+
+  factory AttemptInfo.fromJson(Map<String, dynamic> j) => AttemptInfo(
+        attempt: (j['attempt'] as num?)?.toInt() ?? 1,
+        status: (j['status'] ?? '').toString(),
+        score: (j['score'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// One question of a submitted try, with the student's answer.
+class AnswerReview {
+  AnswerReview({
+    required this.type,
+    required this.text,
+    required this.choices,
+    required this.points,
+    required this.yourChoiceIndex,
+    required this.yourText,
+    required this.correctIndex,
+    required this.awarded,
+    required this.feedback,
+  });
+
+  final String type;
+  final String text;
+  final List<String> choices;
+  final int points;
+  final int? yourChoiceIndex;
+  final String yourText;
+  final int? correctIndex; // empty until the correct answers are revealed
+  final int? awarded; // empty until graded
+  final String feedback;
+
+  bool get isChoice => type == 'mcq';
+
+  factory AnswerReview.fromJson(Map<String, dynamic> j) => AnswerReview(
+        type: (j['type'] ?? 'mcq').toString(),
+        text: (j['text'] ?? '').toString(),
+        choices: ((j['choices'] as List?) ?? []).map((c) => c.toString()).toList(),
+        points: (j['points'] as num?)?.toInt() ?? 1,
+        yourChoiceIndex: (j['yourChoiceIndex'] as num?)?.toInt(),
+        yourText: (j['yourText'] ?? '').toString(),
+        correctIndex: (j['correctIndex'] as num?)?.toInt(),
+        awarded: (j['awarded'] as num?)?.toInt(),
+        feedback: (j['feedback'] ?? '').toString(),
+      );
+}
+
+class QuizResult {
+  QuizResult({
+    required this.title,
+    required this.attempt,
+    required this.attemptsUsed,
+    required this.attemptsAllowed,
+    required this.revealed,
+    required this.attempts,
+    required this.status,
+    required this.score,
+    required this.totalPoints,
+    required this.answers,
+  });
+
+  final String title;
+  final int attempt; // which try is shown
+  final int attemptsUsed;
+  final int attemptsAllowed;
+  final bool revealed; // are the correct answers shown?
+  final List<AttemptInfo> attempts;
+  final String status; // 'submitted' or 'graded'
+  final int score;
+  final int totalPoints;
+  final List<AnswerReview> answers;
+
+  factory QuizResult.fromJson(Map<String, dynamic> j) => QuizResult(
+        title: (j['title'] ?? '').toString(),
+        attempt: (j['attempt'] as num?)?.toInt() ?? 1,
+        attemptsUsed: (j['attemptsUsed'] as num?)?.toInt() ?? 1,
+        attemptsAllowed: (j['attemptsAllowed'] as num?)?.toInt() ?? 1,
+        revealed: j['revealed'] as bool? ?? false,
+        attempts: ((j['attempts'] as List?) ?? [])
+            .map((a) => AttemptInfo.fromJson(a as Map<String, dynamic>))
+            .toList(),
+        status: (j['status'] ?? '').toString(),
+        score: (j['score'] as num?)?.toInt() ?? 0,
+        totalPoints: (j['totalPoints'] as num?)?.toInt() ?? 0,
+        answers: ((j['answers'] as List?) ?? [])
+            .map((a) => AnswerReview.fromJson(a as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+class QuizTakeApi {
+  static Future<QuizTake> quiz(String id) async {
+    final data = await ApiService._request('GET', '/quizzes/$id') as Map<String, dynamic>;
+    return QuizTake.fromJson(data);
+  }
+
+  /// answers: [{ 'questionId': ..., 'choiceIndex': ... }, { 'questionId': ..., 'text': ... }]
+  static Future<QuizResult> submit(String id, List<Map<String, dynamic>> answers) async {
+    final data = await ApiService._request('POST', '/quizzes/$id/submit',
+        body: {'answers': answers}, timeout: const Duration(seconds: 30)) as Map<String, dynamic>;
+    return QuizResult.fromJson(data);
+  }
+
+  /// The latest try, or a specific one.
+  static Future<QuizResult> mySubmission(String id, {int? attempt}) async {
+    final query = attempt == null ? '' : '?attempt=$attempt';
+    final data = await ApiService._request('GET', '/quizzes/$id/my-submission$query')
+        as Map<String, dynamic>;
+    return QuizResult.fromJson(data);
+  }
+}
+
+// ---------- Grading (instructors and admins) ----------
+
+class AttemptRow {
+  AttemptRow({
+    required this.submissionId,
+    required this.attempt,
+    required this.status,
+    required this.score,
+  });
+
+  final String submissionId;
+  final int attempt;
+  final String status; // 'submitted' (needs grading) or 'graded'
+  final int score;
+
+  factory AttemptRow.fromJson(Map<String, dynamic> j) => AttemptRow(
+        submissionId: (j['submissionId'] ?? '').toString(),
+        attempt: (j['attempt'] as num?)?.toInt() ?? 1,
+        status: (j['status'] ?? '').toString(),
+        score: (j['score'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class StudentSubmissions {
+  StudentSubmissions({
+    required this.id,
+    required this.name,
+    required this.email,
+    required this.attemptsUsed,
+    required this.bestScore,
+    required this.needsGrading,
+    required this.attempts,
+  });
+
+  final String id;
+  final String name;
+  final String email;
+  final int attemptsUsed;
+  final int? bestScore; // highest graded try, if any
+  final int needsGrading;
+  final List<AttemptRow> attempts;
+
+  factory StudentSubmissions.fromJson(Map<String, dynamic> j) => StudentSubmissions(
+        id: (j['id'] ?? '').toString(),
+        name: (j['name'] ?? '').toString(),
+        email: (j['email'] ?? '').toString(),
+        attemptsUsed: (j['attemptsUsed'] as num?)?.toInt() ?? 0,
+        bestScore: (j['bestScore'] as num?)?.toInt(),
+        needsGrading: (j['needsGrading'] as num?)?.toInt() ?? 0,
+        attempts: ((j['attempts'] as List?) ?? [])
+            .map((a) => AttemptRow.fromJson(a as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+class SubmissionsOverview {
+  SubmissionsOverview({
+    required this.quizId,
+    required this.courseId,
+    required this.title,
+    required this.kind,
+    required this.totalPoints,
+    required this.maxAttempts,
+    required this.students,
+  });
+
+  final String quizId;
+  final String courseId;
+  final String title;
+  final String kind;
+  final int totalPoints;
+  final int maxAttempts;
+  final List<StudentSubmissions> students;
+
+  factory SubmissionsOverview.fromJson(Map<String, dynamic> j) => SubmissionsOverview(
+        quizId: (j['quizId'] ?? '').toString(),
+        courseId: (j['courseId'] ?? '').toString(),
+        title: (j['title'] ?? '').toString(),
+        kind: (j['kind'] ?? 'quiz').toString(),
+        totalPoints: (j['totalPoints'] as num?)?.toInt() ?? 0,
+        maxAttempts: (j['maxAttempts'] as num?)?.toInt() ?? 1,
+        students: ((j['students'] as List?) ?? [])
+            .map((s) => StudentSubmissions.fromJson(s as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+/// One question of a try, as the grader sees it.
+class GradeAnswer {
+  GradeAnswer({
+    required this.questionId,
+    required this.type,
+    required this.text,
+    required this.choices,
+    required this.points,
+    required this.yourChoiceIndex,
+    required this.yourText,
+    required this.correctIndex,
+    required this.awarded,
+    required this.feedback,
+  });
+
+  final String questionId;
+  final String type;
+  final String text;
+  final List<String> choices;
+  final int points;
+  final int? yourChoiceIndex;
+  final String yourText;
+  final int? correctIndex;
+  final int? awarded; // empty until graded
+  final String feedback;
+
+  bool get isChoice => type == 'mcq';
+
+  factory GradeAnswer.fromJson(Map<String, dynamic> j) => GradeAnswer(
+        questionId: (j['questionId'] ?? '').toString(),
+        type: (j['type'] ?? 'mcq').toString(),
+        text: (j['text'] ?? '').toString(),
+        choices: ((j['choices'] as List?) ?? []).map((c) => c.toString()).toList(),
+        points: (j['points'] as num?)?.toInt() ?? 1,
+        yourChoiceIndex: (j['yourChoiceIndex'] as num?)?.toInt(),
+        yourText: (j['yourText'] ?? '').toString(),
+        correctIndex: (j['correctIndex'] as num?)?.toInt(),
+        awarded: (j['awarded'] as num?)?.toInt(),
+        feedback: (j['feedback'] ?? '').toString(),
+      );
+}
+
+class GradeDetail {
+  GradeDetail({
+    required this.submissionId,
+    required this.title,
+    required this.studentName,
+    required this.studentEmail,
+    required this.attempt,
+    required this.status,
+    required this.score,
+    required this.totalPoints,
+    required this.submittedAt,
+    required this.answers,
+  });
+
+  final String submissionId;
+  final String title;
+  final String studentName;
+  final String studentEmail;
+  final int attempt;
+  final String status;
+  final int score;
+  final int totalPoints;
+  final DateTime? submittedAt;
+  final List<GradeAnswer> answers;
+
+  factory GradeDetail.fromJson(Map<String, dynamic> j) => GradeDetail(
+        submissionId: (j['submissionId'] ?? '').toString(),
+        title: (j['title'] ?? '').toString(),
+        studentName: (j['studentName'] ?? '').toString(),
+        studentEmail: (j['studentEmail'] ?? '').toString(),
+        attempt: (j['attempt'] as num?)?.toInt() ?? 1,
+        status: (j['status'] ?? '').toString(),
+        score: (j['score'] as num?)?.toInt() ?? 0,
+        totalPoints: (j['totalPoints'] as num?)?.toInt() ?? 0,
+        submittedAt: DateTime.tryParse((j['submittedAt'] ?? '').toString())?.toLocal(),
+        answers: ((j['answers'] as List?) ?? [])
+            .map((a) => GradeAnswer.fromJson(a as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+class GradingApi {
+  static Future<SubmissionsOverview> overview(String quizId) async {
+    final data = await ApiService._request('GET', '/quizzes/$quizId/submissions')
+        as Map<String, dynamic>;
+    return SubmissionsOverview.fromJson(data);
+  }
+
+  static Future<GradeDetail> detail(String quizId, String submissionId) async {
+    final data = await ApiService._request('GET', '/quizzes/$quizId/submissions/$submissionId')
+        as Map<String, dynamic>;
+    return GradeDetail.fromJson(data);
+  }
+
+  /// grades: [{ 'questionId': ..., 'points': int or null, 'feedback': '...' }]
+  static Future<GradeDetail> save(
+      String quizId, String submissionId, List<Map<String, dynamic>> grades) async {
+    final data = await ApiService._request(
+        'PUT', '/quizzes/$quizId/submissions/$submissionId/grade',
+        body: {'grades': grades}) as Map<String, dynamic>;
+    return GradeDetail.fromJson(data);
   }
 }

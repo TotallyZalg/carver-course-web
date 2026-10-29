@@ -120,7 +120,7 @@ class _ModulePageState extends State<ModulePage> {
     final panel = _AiPanel(
       key: ValueKey(module.id),
       moduleId: module.id,
-      hasText: module.content.trim().length >= 20,
+      hasText: module.content.trim().length >= 20 || module.fileId != null,
     );
 
     final wide = MediaQuery.of(context).size.width >= 900;
@@ -145,14 +145,14 @@ class _AiPanel extends StatefulWidget {
   const _AiPanel({super.key, required this.moduleId, required this.hasText});
 
   final String moduleId;
-  final bool hasText;
+  final bool hasText; // true when the module has handout text or a PDF
 
   @override
   State<_AiPanel> createState() => _AiPanelState();
 }
 
 class _AiPanelState extends State<_AiPanel> {
-  // Remembers results while the app is open, so reopening a module does not call the AI again.
+  // Remembers results while the app is open, so reopening a module is instant.
   static final Map<String, AiReview> _cache = {};
 
   bool _enabled = Session.aiTutorEnabled;
@@ -172,13 +172,11 @@ class _AiPanelState extends State<_AiPanel> {
     }
   }
 
-  Future<void> _generate({bool force = false}) async {
-    if (!force) {
-      final cached = _cache[widget.moduleId];
-      if (cached != null) {
-        setState(() => _review = cached);
-        return;
-      }
+  Future<void> _generate() async {
+    final cached = _cache[widget.moduleId];
+    if (cached != null) {
+      setState(() => _review = cached);
+      return;
     }
     setState(() {
       _loading = true;
@@ -256,27 +254,35 @@ class _AiPanelState extends State<_AiPanel> {
   Widget _body() {
     if (!_enabled) {
       return Text(
-        'The AI tutor is off. Turn it on to see keywords and key statements for this module.',
+        'The AI tutor is off. Turn it on to see a summary, keywords and key statements for this module.',
         style: AppText.sans(size: 11, color: Colors.black87),
       );
     }
     if (!widget.hasText) {
       return Text(
-        'Nothing to review yet. This module has no handout text.',
+        'Nothing to review yet. This module has no handout text or PDF.',
         style: AppText.sans(size: 11, color: Colors.black87),
       );
     }
     if (_loading) {
       return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(
-            width: 14,
-            height: 14,
-            child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.sidebar),
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.sidebar),
+            ),
           ),
           const SizedBox(width: 10),
-          Text('Reading the handout…',
-              style: AppText.sans(size: 11, color: Colors.black87)),
+          Expanded(
+            child: Text(
+              'Reading the handout… The first time can take up to a minute when there is a PDF.',
+              style: AppText.sans(size: 11, color: Colors.black87),
+            ),
+          ),
         ],
       );
     }
@@ -287,7 +293,7 @@ class _AiPanelState extends State<_AiPanel> {
           Text(_error!, style: AppText.sans(size: 11, color: const Color(0xFFB3261E))),
           const SizedBox(height: 8),
           OutlinedButton(
-            onPressed: () => _generate(force: true),
+            onPressed: _generate,
             child: Text('Try again', style: AppText.sans(size: 11, color: AppColors.label)),
           ),
         ],
@@ -295,53 +301,58 @@ class _AiPanelState extends State<_AiPanel> {
     }
     final review = _review;
     if (review == null) return const SizedBox.shrink();
-    if (review.keywords.isEmpty && review.keyStatements.isEmpty) {
-      return Text('The AI returned no notes. Try regenerating.',
+    if (review.summary.isEmpty && review.keywords.isEmpty && review.keyStatements.isEmpty) {
+      return Text('The AI returned no notes for this module.',
           style: AppText.sans(size: 11, color: Colors.black87));
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('KEYWORDS', style: AppText.sans(size: 10.5, color: AppColors.label)),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (final k in review.keywords)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppColors.sidebar,
-                  borderRadius: BorderRadius.circular(10),
+        if (review.summary.isNotEmpty) ...[
+          Text('SUMMARY', style: AppText.sans(size: 10.5, color: AppColors.label)),
+          const SizedBox(height: 6),
+          Text(review.summary, style: AppText.sans(size: 11.5, color: Colors.black87)),
+          const SizedBox(height: 14),
+        ],
+        if (review.keywords.isNotEmpty) ...[
+          Text('KEYWORDS', style: AppText.sans(size: 10.5, color: AppColors.label)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final k in review.keywords)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppColors.sidebar,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(k,
+                      style: AppText.sans(
+                          size: 10, color: Colors.white, weight: FontWeight.w600)),
                 ),
-                child: Text(k,
-                    style: AppText.sans(
-                        size: 10, color: Colors.white, weight: FontWeight.w600)),
-              ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        Text('KEY STATEMENTS', style: AppText.sans(size: 10.5, color: AppColors.label)),
-        const SizedBox(height: 6),
-        for (final s in review.keyStatements)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('•  ', style: AppText.sans(size: 11, color: AppColors.orange)),
-                Expanded(
-                  child: Text(s, style: AppText.sans(size: 11, color: Colors.black87)),
-                ),
-              ],
-            ),
+            ],
           ),
-        TextButton.icon(
-          onPressed: () => _generate(force: true),
-          icon: const Icon(Icons.refresh_rounded, size: 16, color: AppColors.label),
-          label: Text('Regenerate', style: AppText.sans(size: 11, color: AppColors.label)),
-        ),
+          const SizedBox(height: 14),
+        ],
+        if (review.keyStatements.isNotEmpty) ...[
+          Text('KEY STATEMENTS', style: AppText.sans(size: 10.5, color: AppColors.label)),
+          const SizedBox(height: 6),
+          for (final s in review.keyStatements)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('•  ', style: AppText.sans(size: 11, color: AppColors.orange)),
+                  Expanded(
+                    child: Text(s, style: AppText.sans(size: 11, color: Colors.black87)),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ],
     );
   }

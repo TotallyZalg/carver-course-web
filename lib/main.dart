@@ -1,17 +1,19 @@
 import 'package:flutter/material.dart';
-import 'institutions_page.dart';
-
 
 import 'api_service.dart';
 import 'change_password_page.dart';
 import 'course_page.dart';
 import 'courses_page.dart';
 import 'dashboard_page.dart';
+import 'grade_page.dart';
+import 'institutions_page.dart';
 import 'module_page.dart';
+import 'quiz_editor_page.dart';
+import 'quiz_page.dart';
+import 'quiz_review_page.dart';
 import 'sign_in_page.dart';
 import 'theme.dart';
 import 'users_page.dart';
-import 'quiz_editor_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -37,6 +39,8 @@ class CarverCourseApp extends StatelessWidget {
   }
 }
 
+/// Turns a page address like /course/123 into the right page.
+/// An address that matches nothing goes to AuthGate (which sends you home).
 Route<dynamic> _route(RouteSettings settings) {
   final segments = Uri.parse(settings.name ?? '/')
       .pathSegments
@@ -44,6 +48,7 @@ Route<dynamic> _route(RouteSettings settings) {
       .toList();
 
   Widget page = const AuthGate();
+
   if (segments.length == 1) {
     switch (segments[0]) {
       case 'dashboard':
@@ -57,23 +62,33 @@ Route<dynamic> _route(RouteSettings settings) {
       case 'change-password':
         page = const ChangePasswordPage();
     }
-  }  else if (segments.length == 2) {
-    if (segments[0] == 'course') {
-      page = CoursePage(courseId: segments[1]);
-    } else if (segments[0] == 'module') {
-      page = ModulePage(moduleId: segments[1]);
-    } else if (segments[0] == 'quiz-new') {
-      page = QuizEditorPage(courseId: segments[1]);
+  } else if (segments.length == 2) {
+    switch (segments[0]) {
+      case 'course':
+        page = CoursePage(courseId: segments[1]);
+      case 'module':
+        page = ModulePage(moduleId: segments[1]);
+      case 'quiz':
+        page = QuizPage(quizId: segments[1]);
+      case 'quiz-review':
+        page = QuizReviewPage(quizId: segments[1]);
+      case 'quiz-new':
+        page = QuizEditorPage(courseId: segments[1]);
+    }
+  } else if (segments.length == 3) {
+    switch (segments[0]) {
+      case 'quiz-new':
+        page = QuizEditorPage(courseId: segments[1], chapterId: segments[2]);
+      case 'grade':
+        page = GradePage(quizId: segments[1], submissionId: segments[2]);
     }
   }
-    if (segments.length == 3 && segments[0] == 'quiz-new') {
-    page = QuizEditorPage(courseId: segments[1], chapterId: segments[2]);
-  }
+
   return MaterialPageRoute(settings: settings, builder: (_) => page);
 }
 
 /// The "/" page: decides where to go.
-/// Saved session -> check it with the server -> dashboard (or change-password).
+/// Saved session -> check it with the server -> the person's home page.
 /// No session -> sign-in page.
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
@@ -102,7 +117,7 @@ class _AuthGateState extends State<AuthGate> {
 
     if (!mounted) return;
     if (Session.isLoggedIn) {
-            Navigator.pushReplacementNamed(context, Session.homeRoute);
+      Navigator.pushReplacementNamed(context, Session.homeRoute);
     } else {
       setState(() => _checking = false);
     }
