@@ -3,13 +3,36 @@ import 'package:flutter/material.dart';
 import 'theme.dart';
 import 'ui_kit.dart';
 
-/// The schedule settings of one quiz, edited by the builder and by the "Edit schedule" dialog.
+/// The settings of one quiz, edited by the builder and by the "Edit settings" dialog:
+/// schedule (opens, due, tries) and the anti-cheating options.
 class QuizSchedule {
-  QuizSchedule({this.opensAt, this.dueAt, this.maxAttempts = 1});
+  QuizSchedule({
+    this.opensAt,
+    this.dueAt,
+    this.maxAttempts = 1,
+    this.lockAi = false,
+    this.blockPaste = false,
+    this.shuffle = false,
+    this.timeLimitMinutes = 0,
+  });
 
   DateTime? opensAt; // null = open as soon as it is published
   DateTime? dueAt; // null = no deadline
   int maxAttempts;
+  bool lockAi; // AI tutor locked while this is open
+  bool blockPaste; // no copy/paste on the quiz page
+  bool shuffle; // questions and choices shuffled per try
+  int timeLimitMinutes; // 0 = no time limit
+
+  QuizSchedule copy() => QuizSchedule(
+        opensAt: opensAt,
+        dueAt: dueAt,
+        maxAttempts: maxAttempts,
+        lockAi: lockAi,
+        blockPaste: blockPaste,
+        shuffle: shuffle,
+        timeLimitMinutes: timeLimitMinutes,
+      );
 
   /// An error message, or null when the schedule is fine.
   String? check() {
@@ -49,7 +72,12 @@ Future<DateTime?> pickDateTime(BuildContext context, DateTime? initial) async {
   return DateTime(date.year, date.month, date.day, time.hour, time.minute);
 }
 
-/// The Opens / Due / Tries controls. It changes [schedule] and calls [onChanged].
+/// Time limit choices in minutes (0 = no limit).
+const List<int> timeLimitChoices = [0, 10, 15, 20, 30, 45, 60, 90, 120];
+
+String timeLimitLabel(int minutes) => minutes == 0 ? 'No time limit' : '$minutes minutes';
+
+/// The Opens / Due / Tries / anti-cheating controls. It changes [schedule] and calls [onChanged].
 class ScheduleFields extends StatelessWidget {
   const ScheduleFields({super.key, required this.schedule, required this.onChanged});
 
@@ -115,6 +143,25 @@ class ScheduleFields extends StatelessWidget {
     );
   }
 
+  Widget _switchRow({
+    required String title,
+    required String help,
+    required bool value,
+    required ValueChanged<bool> onToggle,
+  }) {
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      value: value,
+      onChanged: (v) {
+        onToggle(v);
+        onChanged();
+      },
+      title: Text(title, style: AppText.sans(size: 12, color: AppColors.darkBrown)),
+      subtitle: Text(help, style: AppText.sans(size: 11, color: Colors.black54)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final problem = schedule.check();
@@ -150,6 +197,40 @@ class ScheduleFields extends StatelessWidget {
             },
           ),
         ),
+        fieldLabel('TIME LIMIT PER TRY'),
+        SizedBox(
+          width: 180,
+          child: SelectBox<int>(
+            value: schedule.timeLimitMinutes,
+            items: [
+              for (final m in timeLimitChoices)
+                DropdownMenuItem(value: m, child: Text(timeLimitLabel(m))),
+            ],
+            onChanged: (v) {
+              schedule.timeLimitMinutes = v;
+              onChanged();
+            },
+          ),
+        ),
+        fieldLabel('ANTI-CHEATING'),
+        _switchRow(
+          title: 'Lock the AI tutor',
+          help: 'Students cannot use the AI tutor for this course while this is open.',
+          value: schedule.lockAi,
+          onToggle: (v) => schedule.lockAi = v,
+        ),
+        _switchRow(
+          title: 'Block copy and paste',
+          help: 'Best effort on the web. It cannot stop another device.',
+          value: schedule.blockPaste,
+          onToggle: (v) => schedule.blockPaste = v,
+        ),
+        _switchRow(
+          title: 'Shuffle questions and choices',
+          help: 'Every try shows a different order.',
+          value: schedule.shuffle,
+          onToggle: (v) => schedule.shuffle = v,
+        ),
         if (problem != null)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -160,7 +241,7 @@ class ScheduleFields extends StatelessWidget {
   }
 }
 
-/// "Edit schedule" for a quiz that already exists. Returns the new [QuizSchedule] on SAVE.
+/// "Edit settings" for a quiz that already exists. Returns the new [QuizSchedule] on SAVE.
 class ScheduleDialog extends StatefulWidget {
   const ScheduleDialog({super.key, required this.quizTitle, required this.initial});
 
@@ -172,17 +253,13 @@ class ScheduleDialog extends StatefulWidget {
 }
 
 class _ScheduleDialogState extends State<ScheduleDialog> {
-  late final QuizSchedule _schedule = QuizSchedule(
-    opensAt: widget.initial.opensAt,
-    dueAt: widget.initial.dueAt,
-    maxAttempts: widget.initial.maxAttempts,
-  );
+  late final QuizSchedule _schedule = widget.initial.copy();
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: AppColors.cardCream,
-      title: Text('Quiz schedule', style: AppText.serif(size: 16, color: AppColors.title)),
+      title: Text('Quiz settings', style: AppText.serif(size: 16, color: AppColors.title)),
       content: SizedBox(
         width: 420,
         child: SingleChildScrollView(

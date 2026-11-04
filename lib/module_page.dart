@@ -164,8 +164,7 @@ class _AiPanelState extends State<_AiPanel> {
   @override
   void initState() {
     super.initState();
-    _review = _cache[widget.moduleId];
-    if (_enabled && widget.hasText && _review == null) {
+    if (_enabled && widget.hasText) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _generate();
       });
@@ -173,11 +172,6 @@ class _AiPanelState extends State<_AiPanel> {
   }
 
   Future<void> _generate() async {
-    final cached = _cache[widget.moduleId];
-    if (cached != null) {
-      setState(() => _review = cached);
-      return;
-    }
     setState(() {
       _loading = true;
       _error = null;

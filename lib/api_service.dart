@@ -527,6 +527,10 @@ class ChapterItem {
     this.kind = 'quiz',
     this.postedByRole,
     this.postedByName,
+    this.lockAi = false,
+    this.blockPaste = false,
+    this.shuffle = false,
+    this.timeLimitMinutes = 0,
     this.needsGrading = 0,
   });
 
@@ -551,6 +555,10 @@ class ChapterItem {
   final String kind; // 'quiz', 'activity', 'minitask' or 'task_performance'
   final String? postedByRole; // 'admin' or 'instructor'
   final String? postedByName;
+  final bool lockAi; // quizzes: AI tutor locked while open
+  final bool blockPaste; // quizzes: copy/paste blocked
+  final bool shuffle; // quizzes: shuffled per try
+  final int timeLimitMinutes; // quizzes: 0 = no limit
   final int needsGrading; // quizzes: tries waiting for hand grading (instructor/admin view)
 
   bool get isModule => type == 'module';
@@ -577,6 +585,10 @@ class ChapterItem {
         kind: (j['kind'] ?? 'quiz').toString(),
         postedByRole: j['postedByRole'] as String?,
         postedByName: j['postedByName'] as String?,
+        lockAi: j['lockAi'] as bool? ?? false,
+        blockPaste: j['blockPaste'] as bool? ?? false,
+        shuffle: j['shuffle'] as bool? ?? false,
+        timeLimitMinutes: (j['timeLimitMinutes'] as num?)?.toInt() ?? 0,
         needsGrading: (j['needsGrading'] as num?)?.toInt() ?? 0,
       );
 }
@@ -638,6 +650,10 @@ class ChapterApi {
     DateTime? opensAt,
     DateTime? dueAt,
     int maxAttempts = 1,
+    bool lockAi = false,
+    bool blockPaste = false,
+    bool shuffle = false,
+    int timeLimitMinutes = 0,
   }) async {
     final data = await ApiService._request('POST', '/quizzes/course/$courseId', body: {
       'title': title,
@@ -647,6 +663,10 @@ class ChapterApi {
       'maxAttempts': maxAttempts,
       'opensAt': opensAt?.toUtc().toIso8601String(),
       'dueAt': dueAt?.toUtc().toIso8601String(),
+      'lockAi': lockAi,
+      'blockPaste': blockPaste,
+      'shuffle': shuffle,
+      'timeLimitMinutes': timeLimitMinutes,
       'chapterId': ?chapterId,
     }) as Map<String, dynamic>;
     return (data['id'] ?? '').toString();
@@ -658,12 +678,311 @@ class ChapterApi {
     DateTime? opensAt,
     DateTime? dueAt,
     required int maxAttempts,
+    required bool lockAi,
+    required bool blockPaste,
+    required bool shuffle,
+    required int timeLimitMinutes,
   }) async {
     await ApiService._request('PATCH', '/quizzes/$quizId', body: {
       'opensAt': opensAt?.toUtc().toIso8601String(),
       'dueAt': dueAt?.toUtc().toIso8601String(),
       'maxAttempts': maxAttempts,
+      'lockAi': lockAi,
+      'blockPaste': blockPaste,
+      'shuffle': shuffle,
+      'timeLimitMinutes': timeLimitMinutes,
     });
+  }
+}
+
+// ---------- Dashboard ----------
+
+class DashboardTask {
+  DashboardTask({
+    required this.id,
+    required this.title,
+    required this.kind,
+    required this.courseId,
+    required this.courseTitle,
+    required this.dueAt,
+    required this.detail,
+  });
+
+  final String id;
+  final String title;
+  final String kind;
+  final String courseId;
+  final String courseTitle;
+  final DateTime? dueAt; // already converted to the local time zone
+  final String detail; // "Try 1 of 2" (student) or "3 to grade" (staff)
+
+  factory DashboardTask.fromJson(Map<String, dynamic> j) => DashboardTask(
+        id: (j['id'] ?? '').toString(),
+        title: (j['title'] ?? '').toString(),
+        kind: (j['kind'] ?? 'quiz').toString(),
+        courseId: (j['courseId'] ?? '').toString(),
+        courseTitle: (j['courseTitle'] ?? '').toString(),
+        dueAt: DateTime.tryParse((j['dueAt'] ?? '').toString())?.toLocal(),
+        detail: (j['detail'] ?? '').toString(),
+      );
+}
+
+class DashboardOverview {
+  DashboardOverview({
+    required this.role,
+    this.total = 0,
+    this.done = 0,
+    this.open = 0,
+    this.waiting = 0,
+    this.graded = 0,
+    this.averagePercent,
+    this.strongestCourse,
+    this.focusCourse,
+    this.courses = 0,
+    this.quizzes = 0,
+    this.toGrade = 0,
+  });
+
+  final String role;
+  // student
+  final int total; // published work so far
+  final int done; // work with at least one try
+  final int open; // open now with tries left
+  final int waiting; // tries waiting for hand grading
+  final int graded; // work with a graded try
+  final int? averagePercent; // null until something is graded
+  final String? strongestCourse;
+  final String? focusCourse;
+  // instructor / admin
+  final int courses;
+  final int quizzes;
+  final int toGrade;
+
+  factory DashboardOverview.fromJson(Map<String, dynamic> j) => DashboardOverview(
+        role: (j['role'] ?? '').toString(),
+        total: (j['total'] as num?)?.toInt() ?? 0,
+        done: (j['done'] as num?)?.toInt() ?? 0,
+        open: (j['open'] as num?)?.toInt() ?? 0,
+        waiting: (j['waiting'] as num?)?.toInt() ?? 0,
+        graded: (j['graded'] as num?)?.toInt() ?? 0,
+        averagePercent: (j['averagePercent'] as num?)?.toInt(),
+        strongestCourse: j['strongestCourse'] as String?,
+        focusCourse: j['focusCourse'] as String?,
+        courses: (j['courses'] as num?)?.toInt() ?? 0,
+        quizzes: (j['quizzes'] as num?)?.toInt() ?? 0,
+        toGrade: (j['toGrade'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class DashboardApi {
+  static Future<DashboardOverview> overview() async {
+    final data = await ApiService._request('GET', '/dashboard/overview') as Map<String, dynamic>;
+    return DashboardOverview.fromJson(data);
+  }
+  static Future<List<DashboardTask>> tasks() async {
+    final data = await ApiService._request('GET', '/dashboard/tasks') as Map<String, dynamic>;
+    return ((data['tasks'] as List?) ?? [])
+        .map((t) => DashboardTask.fromJson(t as Map<String, dynamic>))
+        .toList();
+  }
+}
+
+// ---------- News ----------
+
+class NewsItem {
+  NewsItem({required this.id, required this.tag, required this.title, required this.createdAt});
+
+  final String id;
+  final String tag; // 'NEW', 'EVENT' or 'UPDATE'
+  final String title;
+  final DateTime? createdAt; // already converted to the local time zone
+
+  factory NewsItem.fromJson(Map<String, dynamic> j) => NewsItem(
+        id: (j['id'] ?? '').toString(),
+        tag: (j['tag'] ?? 'NEW').toString(),
+        title: (j['title'] ?? '').toString(),
+        createdAt: DateTime.tryParse((j['createdAt'] ?? '').toString())?.toLocal(),
+      );
+}
+
+class NewsApi {
+  static Future<List<NewsItem>> list() async {
+    final data = await ApiService._request('GET', '/news') as List;
+    return data.map((n) => NewsItem.fromJson(n as Map<String, dynamic>)).toList();
+  }
+
+  static Future<void> create({required String tag, required String title}) async {
+    await ApiService._request('POST', '/news', body: {'tag': tag, 'title': title});
+  }
+
+  static Future<void> delete(String id) async {
+    await ApiService._request('DELETE', '/news/$id');
+  }
+}
+
+// ---------- AI practice ----------
+
+class PracticeQuestion {
+  PracticeQuestion({
+    required this.text,
+    required this.choices,
+    required this.correctIndex,
+    required this.explanation,
+  });
+
+  final String text;
+  final List<String> choices;
+  final int correctIndex;
+  final String explanation;
+
+  factory PracticeQuestion.fromJson(Map<String, dynamic> j) => PracticeQuestion(
+        text: (j['text'] ?? '').toString(),
+        choices: ((j['choices'] as List?) ?? []).map((c) => c.toString()).toList(),
+        correctIndex: (j['correctIndex'] as num?)?.toInt() ?? 0,
+        explanation: (j['explanation'] ?? '').toString(),
+      );
+}
+
+class PracticeQuiz {
+  PracticeQuiz({required this.id, required this.moduleTitle, required this.questions});
+
+  final String id; // the saved attempt
+  final String moduleTitle;
+  final List<PracticeQuestion> questions;
+
+  factory PracticeQuiz.fromJson(Map<String, dynamic> j) => PracticeQuiz(
+        id: (j['id'] ?? '').toString(),
+        moduleTitle: (j['moduleTitle'] ?? '').toString(),
+        questions: ((j['questions'] as List?) ?? [])
+            .map((q) => PracticeQuestion.fromJson(q as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+/// One line of the practice history list.
+class PracticeSummary {
+  PracticeSummary({
+    required this.id,
+    required this.courseTitle,
+    required this.moduleTitle,
+    required this.score,
+    required this.total,
+    required this.finishedAt,
+  });
+
+  final String id;
+  final String courseTitle;
+  final String moduleTitle;
+  final int score;
+  final int total;
+  final DateTime? finishedAt;
+
+  factory PracticeSummary.fromJson(Map<String, dynamic> j) => PracticeSummary(
+        id: (j['id'] ?? '').toString(),
+        courseTitle: (j['courseTitle'] ?? '').toString(),
+        moduleTitle: (j['moduleTitle'] ?? '').toString(),
+        score: (j['score'] as num?)?.toInt() ?? 0,
+        total: (j['total'] as num?)?.toInt() ?? 0,
+        finishedAt: DateTime.tryParse((j['finishedAt'] ?? '').toString())?.toLocal(),
+      );
+}
+
+/// One question of a saved practice result, with the student's pick.
+class PracticeAnswerRow {
+  PracticeAnswerRow({
+    required this.text,
+    required this.choices,
+    required this.correctIndex,
+    required this.pickedIndex,
+    required this.explanation,
+  });
+
+  final String text;
+  final List<String> choices;
+  final int correctIndex;
+  final int? pickedIndex; // null = left unanswered
+  final String explanation;
+
+  bool get isCorrect => pickedIndex == correctIndex;
+
+  factory PracticeAnswerRow.fromJson(Map<String, dynamic> j) => PracticeAnswerRow(
+        text: (j['text'] ?? '').toString(),
+        choices: ((j['choices'] as List?) ?? []).map((c) => c.toString()).toList(),
+        correctIndex: (j['correctIndex'] as num?)?.toInt() ?? 0,
+        pickedIndex: (j['pickedIndex'] as num?)?.toInt(),
+        explanation: (j['explanation'] ?? '').toString(),
+      );
+}
+
+class PracticeDetail {
+  PracticeDetail({
+    required this.id,
+    required this.courseTitle,
+    required this.moduleTitle,
+    required this.score,
+    required this.total,
+    required this.finishedAt,
+    required this.rows,
+  });
+
+  final String id;
+  final String courseTitle;
+  final String moduleTitle;
+  final int score;
+  final int total;
+  final DateTime? finishedAt;
+  final List<PracticeAnswerRow> rows;
+
+  factory PracticeDetail.fromJson(Map<String, dynamic> j) => PracticeDetail(
+        id: (j['id'] ?? '').toString(),
+        courseTitle: (j['courseTitle'] ?? '').toString(),
+        moduleTitle: (j['moduleTitle'] ?? '').toString(),
+        score: (j['score'] as num?)?.toInt() ?? 0,
+        total: (j['total'] as num?)?.toInt() ?? 0,
+        finishedAt: DateTime.tryParse((j['finishedAt'] ?? '').toString())?.toLocal(),
+        rows: ((j['questions'] as List?) ?? [])
+            .map((q) => PracticeAnswerRow.fromJson(q as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+class AiApi {
+  /// Saves the student's picks (null = unanswered) and the server works out the score.
+  static Future<void> finishPractice(String id, List<int?> answers) async {
+    await ApiService._request('POST', '/ai/practice/$id/finish', body: {'answers': answers});
+  }
+
+  static Future<List<PracticeSummary>> practiceHistory() async {
+    final data = await ApiService._request('GET', '/ai/practice') as List;
+    return data.map((p) => PracticeSummary.fromJson(p as Map<String, dynamic>)).toList();
+  }
+
+  static Future<PracticeDetail> practiceDetail(String id) async {
+    final data = await ApiService._request('GET', '/ai/practice/$id') as Map<String, dynamic>;
+    return PracticeDetail.fromJson(data);
+  }
+
+  static Future<void> deletePractice(String id) async {
+    await ApiService._request('DELETE', '/ai/practice/$id');
+  }
+  /// [messages] is the chat so far: [{'role': 'student' | 'tutor', 'text': '...'}]. Returns the reply.
+  static Future<String> chat(String moduleId, List<Map<String, String>> messages) async {
+    final data = await ApiService._request(
+      'POST',
+      '/ai/chat',
+      body: {'moduleId': moduleId, 'messages': messages},
+      timeout: const Duration(seconds: 100),
+    ) as Map<String, dynamic>;
+    return (data['reply'] ?? '').toString();
+  }
+  static Future<PracticeQuiz> practiceQuiz(String moduleId, {int count = 5}) async {
+    final data = await ApiService._request(
+      'POST',
+      '/ai/practice-quiz',
+      body: {'moduleId': moduleId, 'count': count},
+      timeout: const Duration(seconds: 100),
+    ) as Map<String, dynamic>;
+    return PracticeQuiz.fromJson(data);
   }
 }
 
@@ -770,6 +1089,8 @@ class QuizTake {
     required this.questions,
     required this.fileId,
     required this.fileName,
+    this.blockPaste = false,
+    this.timeLimitMinutes = 0,
   });
 
   final String id;
@@ -788,6 +1109,9 @@ class QuizTake {
   final List<QuizQuestion> questions;
   final String? fileId;
   final String? fileName;
+
+  final bool blockPaste; // copy and paste blocked while answering
+  final int timeLimitMinutes; // 0 = no time limit
 
   factory QuizTake.fromJson(Map<String, dynamic> j) => QuizTake(
         id: (j['id'] ?? '').toString(),
@@ -808,6 +1132,8 @@ class QuizTake {
             .toList(),
         fileId: j['fileId'] as String?,
         fileName: j['fileName'] as String?,
+        blockPaste: j['blockPaste'] as bool? ?? false,
+        timeLimitMinutes: (j['timeLimitMinutes'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -907,6 +1233,21 @@ class QuizResult {
       );
 }
 
+/// What the server returns when a timed try starts.
+class QuizStart {
+  QuizStart({required this.secondsLeft, required this.questions});
+
+  final int secondsLeft;
+  final List<QuizQuestion> questions;
+
+  factory QuizStart.fromJson(Map<String, dynamic> j) => QuizStart(
+        secondsLeft: (j['secondsLeft'] as num?)?.toInt() ?? 0,
+        questions: ((j['questions'] as List?) ?? [])
+            .map((q) => QuizQuestion.fromJson(q as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
 class QuizTakeApi {
   static Future<QuizTake> quiz(String id) async {
     final data = await ApiService._request('GET', '/quizzes/$id') as Map<String, dynamic>;
@@ -918,6 +1259,12 @@ class QuizTakeApi {
     final data = await ApiService._request('POST', '/quizzes/$id/submit',
         body: {'answers': answers}, timeout: const Duration(seconds: 30)) as Map<String, dynamic>;
     return QuizResult.fromJson(data);
+  }
+
+  /// Starts (or resumes) a timed try. The server keeps the clock.
+  static Future<QuizStart> start(String id) async {
+    final data = await ApiService._request('POST', '/quizzes/$id/start') as Map<String, dynamic>;
+    return QuizStart.fromJson(data);
   }
 
   /// The latest try, or a specific one.

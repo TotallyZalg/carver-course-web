@@ -5,6 +5,9 @@ import 'change_password_page.dart';
 import 'course_page.dart';
 import 'courses_page.dart';
 import 'dashboard_page.dart';
+import 'ai_chat_page.dart';
+import 'ai_history_page.dart';
+import 'ai_page.dart';
 import 'grade_page.dart';
 import 'institutions_page.dart';
 import 'module_page.dart';
@@ -59,6 +62,12 @@ Route<dynamic> _route(RouteSettings settings) {
         page = const UsersPage();
       case 'institutions':
         page = const InstitutionsPage();
+      case 'ai':
+        page = const AiPage();
+      case 'ai-chat':
+        page = const AiChatPage();
+      case 'ai-history':
+        page = const AiHistoryPage();
       case 'change-password':
         page = const ChangePasswordPage();
     }
@@ -72,6 +81,8 @@ Route<dynamic> _route(RouteSettings settings) {
         page = QuizPage(quizId: segments[1]);
       case 'quiz-review':
         page = QuizReviewPage(quizId: segments[1]);
+      case 'ai-practice':
+        page = AiPracticeDetailPage(id: segments[1]);
       case 'quiz-new':
         page = QuizEditorPage(courseId: segments[1]);
     }

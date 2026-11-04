@@ -135,7 +135,7 @@ class _CoursePageState extends State<CoursePage> {
     await _run(() => ApiService.setQuizPublished(item.id, !item.published));
   }
 
-    Future<void> _editSchedule(ChapterItem item) async {
+  Future<void> _editSchedule(ChapterItem item) async {
     final result = await showDialog<QuizSchedule>(
       context: context,
       builder: (_) => ScheduleDialog(
@@ -144,6 +144,10 @@ class _CoursePageState extends State<CoursePage> {
           opensAt: item.opensAt,
           dueAt: item.dueAt,
           maxAttempts: item.maxAttempts,
+          lockAi: item.lockAi,
+          blockPaste: item.blockPaste,
+          shuffle: item.shuffle,
+          timeLimitMinutes: item.timeLimitMinutes,
         ),
       ),
     );
@@ -154,8 +158,12 @@ class _CoursePageState extends State<CoursePage> {
         opensAt: result.opensAt,
         dueAt: result.dueAt,
         maxAttempts: result.maxAttempts,
+        lockAi: result.lockAi,
+        blockPaste: result.blockPaste,
+        shuffle: result.shuffle,
+        timeLimitMinutes: result.timeLimitMinutes,
       ),
-      done: 'Schedule updated.',
+      done: 'Settings updated.',
     );
   }
 

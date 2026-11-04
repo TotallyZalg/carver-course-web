@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'api_service.dart';
 import 'app_shell.dart';
@@ -6,6 +9,18 @@ import 'pdf_actions.dart';
 import 'quiz_schedule.dart';
 import 'theme.dart';
 import 'ui_kit.dart';
+
+/// Rejects any single change that adds many characters at once (a paste).
+class NoPasteFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final sel = oldValue.selection;
+    final removed = sel.isValid && !sel.isCollapsed ? sel.end - sel.start : 0;
+    final inserted = newValue.text.length - (oldValue.text.length - removed);
+    if (inserted > 12) return oldValue;
+    return newValue;
+  }
+}
 
 class _Loaded {
   _Loaded(this.quiz, this.result);
@@ -30,6 +45,11 @@ class _QuizPageState extends State<QuizPage> {
   final Map<String, TextEditingController> _texts = {}; // question id -> written answer
   bool _submitting = false;
   String? _error;
+  List<QuizQuestion>? _timedQuestions; // questions given by START (timed quizzes only)
+  DateTime? _endsAt; // when the timer ends (this device's clock)
+  Timer? _ticker;
+  int _secondsLeft = 0;
+  bool _starting = false;
 
   bool get _isStudent => Session.role == 'student';
 
@@ -41,6 +61,7 @@ class _QuizPageState extends State<QuizPage> {
 
   @override
   void dispose() {
+    _ticker?.cancel();
     for (final c in _texts.values) {
       c.dispose();
     }
@@ -57,6 +78,9 @@ class _QuizPageState extends State<QuizPage> {
   }
 
   void _clearAnswers() {
+    _ticker?.cancel();
+    _timedQuestions = null;
+    _endsAt = null;
     for (final c in _texts.values) {
       c.dispose();
     }
@@ -89,8 +113,53 @@ class _QuizPageState extends State<QuizPage> {
   TextEditingController _textFor(String questionId) =>
       _texts.putIfAbsent(questionId, () => TextEditingController());
 
-  Future<void> _submit(QuizTake quiz) async {
-    final unanswered = quiz.questions.where((q) {
+  /// The questions on screen: the ones START gave (timed quiz) or the quiz's own.
+  List<QuizQuestion> _questionsOf(QuizTake quiz) => _timedQuestions ?? quiz.questions;
+
+  /// Timed quiz: asks the server to start the clock, then shows the questions.
+  Future<void> _start(QuizTake quiz) async {
+    setState(() {
+      _starting = true;
+      _error = null;
+    });
+    try {
+      final s = await QuizTakeApi.start(widget.quizId);
+      if (!mounted) return;
+      _clearAnswers();
+      setState(() {
+        _timedQuestions = s.questions;
+        _endsAt = DateTime.now().add(Duration(seconds: s.secondsLeft));
+        _secondsLeft = s.secondsLeft;
+        _starting = false;
+      });
+      _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick(quiz));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = errorText(e);
+        _starting = false;
+      });
+    }
+  }
+
+  /// Runs every second. At 0:00 it submits by itself.
+  void _tick(QuizTake quiz) {
+    if (!mounted || _endsAt == null) {
+      _ticker?.cancel();
+      return;
+    }
+    final left = _endsAt!.difference(DateTime.now()).inSeconds;
+    if (left <= 0) {
+      _ticker?.cancel();
+      setState(() => _secondsLeft = 0);
+      if (!_submitting) _submit(quiz, auto: true);
+      return;
+    }
+    setState(() => _secondsLeft = left);
+  }
+
+  Future<void> _submit(QuizTake quiz, {bool auto = false}) async {
+    final unanswered = _questionsOf(quiz).where((q) {
       if (q.isChoice) return !_choices.containsKey(q.id);
       return (_texts[q.id]?.text.trim() ?? '').isEmpty;
     }).length;
@@ -98,7 +167,8 @@ class _QuizPageState extends State<QuizPage> {
     final warning = unanswered > 0
         ? 'You left $unanswered question${unanswered == 1 ? '' : 's'} unanswered. '
         : '';
-    final ok = await confirmDialog(
+    final ok = auto ||
+        await confirmDialog(
       context,
       title: 'Submit quiz',
       message:
@@ -108,7 +178,7 @@ class _QuizPageState extends State<QuizPage> {
     if (!ok || !mounted) return;
 
     final answers = <Map<String, dynamic>>[];
-    for (final q in quiz.questions) {
+    for (final q in _questionsOf(quiz)) {
       if (q.isChoice) {
         answers.add({'questionId': q.id, 'choiceIndex': _choices[q.id]});
       } else {
@@ -122,7 +192,10 @@ class _QuizPageState extends State<QuizPage> {
     });
     try {
       final result = await QuizTakeApi.submit(widget.quizId, answers);
+      _ticker?.cancel();
       if (!mounted) return;
+      _timedQuestions = null;
+      _endsAt = null;
       setState(() {
         _shown = result;
         _taking = false;
@@ -269,6 +342,8 @@ class _QuizPageState extends State<QuizPage> {
   // ----- answering -----
 
   Widget _takeView(QuizTake quiz) {
+    if (quiz.timeLimitMinutes > 0 && _timedQuestions == null) return _startView(quiz);
+    final questions = _questionsOf(quiz);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -281,7 +356,9 @@ class _QuizPageState extends State<QuizPage> {
             style: AppText.sans(size: 12, color: AppColors.title),
           ),
         ),
-        for (var i = 0; i < quiz.questions.length; i++) _questionCard(i, quiz.questions[i]),
+        if (_endsAt != null) _timerBar(),
+        for (var i = 0; i < questions.length; i++)
+          _questionCard(i, questions[i], blockPaste: quiz.blockPaste),
         if (_error != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
@@ -300,7 +377,67 @@ class _QuizPageState extends State<QuizPage> {
     );
   }
 
-  Widget _questionCard(int i, QuizQuestion q) {
+  /// Shown before a timed quiz starts: the clock only begins when START is pressed.
+  Widget _startView(QuizTake quiz) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _header(quiz),
+        const SizedBox(height: 10),
+        CardBox(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Timed: ${quiz.timeLimitMinutes} minutes',
+                style: AppText.serif(size: 16, color: AppColors.title),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'The timer starts when you press START and cannot be paused. '
+                'When time runs out, your answers are submitted automatically.',
+                style: AppText.sans(size: 12, color: Colors.black87),
+              ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Text(_error!,
+                      style: AppText.sans(size: 11, color: const Color(0xFFB3261E))),
+                ),
+              const SizedBox(height: 12),
+              primaryButton(
+                label: 'START',
+                loading: _starting,
+                onPressed: () => _start(quiz),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _timerBar() {
+    final minutes = _secondsLeft ~/ 60;
+    final seconds = (_secondsLeft % 60).toString().padLeft(2, '0');
+    final low = _secondsLeft <= 60;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: CardBox(
+        padding: const EdgeInsets.all(12),
+        child: Text(
+          'Time left: $minutes:$seconds',
+          style: AppText.sans(
+            size: 13,
+            color: low ? const Color(0xFFB3261E) : AppColors.darkBrown,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _questionCard(int i, QuizQuestion q, {bool blockPaste = false}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: CardBox(
@@ -318,9 +455,35 @@ class _QuizPageState extends State<QuizPage> {
             if (q.isChoice)
               for (var j = 0; j < q.choices.length; j++) _choiceTile(q, j)
             else
-              inputField(_textFor(q.id), 'Type your answer', minLines: 3, maxLines: 8),
+              _writtenField(q, blockPaste),
           ],
         ),
+      ),
+    );
+  }
+
+  /// The box for a written answer. With [blockPaste] it refuses pasting (best effort).
+  Widget _writtenField(QuizQuestion q, bool blockPaste) {
+    if (!blockPaste) {
+      return inputField(_textFor(q.id), 'Type your answer', minLines: 3, maxLines: 8);
+    }
+    return Focus(
+      canRequestFocus: false,
+      onKeyEvent: (node, event) {
+        final keys = HardwareKeyboard.instance;
+        final paste = (keys.isControlPressed || keys.isMetaPressed) &&
+            event.logicalKey == LogicalKeyboardKey.keyV;
+        final shiftInsert = keys.isShiftPressed && event.logicalKey == LogicalKeyboardKey.insert;
+        return (paste || shiftInsert) ? KeyEventResult.handled : KeyEventResult.ignored;
+      },
+      child: TextField(
+        controller: _textFor(q.id),
+        minLines: 3,
+        maxLines: 8,
+        style: AppText.sans(size: 12, color: AppColors.darkBrown),
+        decoration: fieldDecoration('Type your answer'),
+        contextMenuBuilder: (context, state) => const SizedBox.shrink(),
+        inputFormatters: [NoPasteFormatter()],
       ),
     );
   }

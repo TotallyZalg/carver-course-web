@@ -147,7 +147,8 @@ class _Sidebar extends StatelessWidget {
           _NavItem(
             icon: Icons.smart_toy_rounded,
             label: 'AI',
-            onTap: () => showSnack(context, 'Coming in the next update'),
+            selected: selected == 'ai',
+            onTap: () => _go(context, '/ai'),
           ),
         _NavItem(
           icon: Icons.help_outline_rounded,

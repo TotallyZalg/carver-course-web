@@ -149,6 +149,10 @@ class _QuizEditorPageState extends State<QuizEditorPage> {
         opensAt: _schedule.opensAt,
         dueAt: _schedule.dueAt,
         maxAttempts: _schedule.maxAttempts,
+        lockAi: _schedule.lockAi,
+        blockPaste: _schedule.blockPaste,
+        shuffle: _schedule.shuffle,
+        timeLimitMinutes: _schedule.timeLimitMinutes,
       );
 
       var message = publish
