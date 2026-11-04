@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'ai_chat_history.dart';
 import 'ai_chat_page.dart';
 import 'api_service.dart';
 import 'app_shell.dart';
@@ -101,11 +102,12 @@ class _AiHistoryPageState extends State<AiHistoryPage> {
                   const AiTabs(current: 'history'),
                   const SizedBox(height: 10),
                   Text(
-                    'Your practice results are saved here. Only you can see them. '
-                    'The newest 60 are kept.',
+                    'Your AI practice results and chats are saved here. Only you can see them. '
+                    'The newest 60 results and 20 chats are kept.',
                     style: AppText.sans(size: 11, color: Colors.black87),
                   ),
                   const SizedBox(height: 12),
+                  fieldLabel('PRACTICE RESULTS'),
                   FutureBuilder<List<PracticeSummary>>(
                     future: _future,
                     builder: (context, snapshot) {
@@ -127,6 +129,8 @@ class _AiHistoryPageState extends State<AiHistoryPage> {
                       );
                     },
                   ),
+                  const SizedBox(height: 24),
+                  const ChatHistorySection(),
                 ],
               ),
       ),

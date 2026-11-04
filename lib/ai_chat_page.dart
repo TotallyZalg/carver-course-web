@@ -48,16 +48,21 @@ class _Msg {
   final String text;
 }
 
-/// Chat with the AI tutor about one module (students). Nothing is saved.
+const int _maxChatMessages = 40; // the same limit as the server
+
+/// Chat with the AI tutor about one module (students). Chats are saved on the server.
+/// With a [conversationId] it opens a saved chat so it can be continued.
 class AiChatPage extends StatefulWidget {
-  const AiChatPage({super.key});
+  const AiChatPage({super.key, this.conversationId});
+
+  final String? conversationId;
 
   @override
   State<AiChatPage> createState() => _AiChatPageState();
 }
 
 class _AiChatPageState extends State<AiChatPage> {
-  late final Future<List<Course>> _coursesFuture;
+  Future<List<Course>>? _coursesFuture; // new chat only
   final _input = TextEditingController();
   final _endKey = GlobalKey();
 
@@ -66,20 +71,34 @@ class _AiChatPageState extends State<AiChatPage> {
   String? _moduleId;
   bool _loadingModules = false;
 
+  String? _conversationId; // null until the first answer is saved
+  String _heading = ''; // saved chat: "Course · Module"
+  bool _loadingChat = false;
+  bool _readOnly = false; // the module was deleted
+
   final List<_Msg> _messages = [];
   bool _sending = false;
   String? _error;
 
   bool get _isStudent => Session.role == 'student';
+  bool get _existing => widget.conversationId != null;
+  bool get _full => _messages.length + 2 > _maxChatMessages;
 
   @override
   void initState() {
     super.initState();
-    _coursesFuture = ApiService.courses();
-    // pick the first course so the module list fills in
-    _coursesFuture.then((list) {
-      if (mounted && list.isNotEmpty) _pickCourse(list.first.id);
-    }, onError: (_) {});
+    if (!_isStudent) return;
+    _conversationId = widget.conversationId;
+    if (_existing) {
+      _loadingChat = true;
+      _loadExisting(widget.conversationId!);
+    } else {
+      _coursesFuture = ApiService.courses();
+      // pick the first course so the module list fills in
+      _coursesFuture!.then((list) {
+        if (mounted && list.isNotEmpty) _pickCourse(list.first.id);
+      }, onError: (_) {});
+    }
   }
 
   @override
@@ -88,12 +107,36 @@ class _AiChatPageState extends State<AiChatPage> {
     super.dispose();
   }
 
+  Future<void> _loadExisting(String id) async {
+    try {
+      final d = await AiApi.chatDetail(id);
+      if (!mounted) return;
+      setState(() {
+        _heading = '${d.courseTitle} · ${d.moduleTitle}';
+        _moduleId = d.moduleId;
+        _readOnly = d.moduleId == null;
+        _messages
+          ..clear()
+          ..addAll([for (final m in d.messages) _Msg(m.role == 'student', m.text)]);
+        _loadingChat = false;
+      });
+      _scrollToEnd();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = errorText(e);
+        _loadingChat = false;
+      });
+    }
+  }
+
   Future<void> _pickCourse(String id) async {
     setState(() {
       _courseId = id;
       _modules = [];
       _moduleId = null;
       _loadingModules = true;
+      _conversationId = null;
       _messages.clear();
       _error = null;
     });
@@ -123,10 +166,22 @@ class _AiChatPageState extends State<AiChatPage> {
     });
   }
 
+  void _newChat() {
+    if (_existing) {
+      Navigator.pushReplacementNamed(context, '/ai-chat');
+    } else {
+      setState(() {
+        _conversationId = null;
+        _messages.clear();
+        _error = null;
+      });
+    }
+  }
+
   Future<void> _send() async {
     final id = _moduleId;
     final text = _input.text.trim();
-    if (id == null || text.isEmpty || _sending) return;
+    if (id == null || text.isEmpty || _sending || _full) return;
 
     setState(() {
       _messages.add(_Msg(true, text));
@@ -137,13 +192,11 @@ class _AiChatPageState extends State<AiChatPage> {
     _scrollToEnd();
 
     try {
-      final history = [
-        for (final m in _messages) {'role': m.fromStudent ? 'student' : 'tutor', 'text': m.text},
-      ];
-      final reply = await AiApi.chat(id, history);
+      final reply = await AiApi.chat(id, text, conversationId: _conversationId);
       if (!mounted || _moduleId != id) return;
       setState(() {
-        _messages.add(_Msg(false, reply));
+        _conversationId = reply.conversationId;
+        _messages.add(_Msg(false, reply.reply));
         _sending = false;
       });
     } catch (e) {
@@ -175,70 +228,103 @@ class _AiChatPageState extends State<AiChatPage> {
                   const SizedBox(height: 10),
                   Text(
                     'Ask the AI tutor about a module. It answers from your handout only, and AI can '
-                    'make mistakes. Your chat is not saved.',
+                    'make mistakes. Your chats are saved in the History tab (the newest 20 are kept) '
+                    'and only you can see them.',
                     style: AppText.sans(size: 11, color: Colors.black87),
                   ),
                   const SizedBox(height: 12),
-                  FutureBuilder<List<Course>>(
-                    future: _coursesFuture,
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState != ConnectionState.done) {
-                        return const LoadingBox();
-                      }
-                      if (snapshot.hasError) return CenteredMessage(errorText(snapshot.error!));
-                      final courses = snapshot.data ?? [];
-                      if (courses.isEmpty) {
-                        return const CenteredMessage('You are not enrolled in any course yet.');
-                      }
-                      return _chatView(courses);
-                    },
-                  ),
+                  if (_existing) _existingBody() else _newChatBody(),
                 ],
               ),
       ),
     );
   }
 
-  Widget _chatView(List<Course> courses) {
+  // ----- a saved chat -----
+
+  Widget _existingBody() {
+    if (_loadingChat) return const LoadingBox();
+    if (_error != null && _messages.isEmpty) return CenteredMessage(_error!);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         CardBox(
           padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              fieldLabel('COURSE'),
-              SelectBox<String>(
-                value: _courseId ?? courses.first.id,
-                items: [
-                  for (final c in courses) DropdownMenuItem(value: c.id, child: Text(c.title)),
-                ],
-                onChanged: _pickCourse,
-              ),
-              fieldLabel('MODULE'),
-              if (_loadingModules)
-                Text('Loading modules...', style: AppText.sans(size: 11, color: Colors.black54))
-              else if (_modules.isEmpty)
-                Text('This course has no modules yet.',
-                    style: AppText.sans(size: 11, color: Colors.black54))
-              else
-                SelectBox<String>(
-                  value: _moduleId ?? _modules.first.id,
-                  items: [
-                    for (final m in _modules) DropdownMenuItem(value: m.id, child: Text(m.title)),
-                  ],
-                  onChanged: (v) => setState(() {
-                    _moduleId = v;
-                    _messages.clear(); // a new module starts a new chat
-                    _error = null;
-                  }),
-                ),
-            ],
-          ),
+          child: Text(_heading, style: AppText.serif(size: 16, color: AppColors.title)),
         ),
         const SizedBox(height: 12),
-        if (_messages.isEmpty && !_sending)
+        _conversation(),
+      ],
+    );
+  }
+
+  // ----- a new chat -----
+
+  Widget _newChatBody() {
+    return FutureBuilder<List<Course>>(
+      future: _coursesFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) return const LoadingBox();
+        if (snapshot.hasError) return CenteredMessage(errorText(snapshot.error!));
+        final courses = snapshot.data ?? [];
+        if (courses.isEmpty) {
+          return const CenteredMessage('You are not enrolled in any course yet.');
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            CardBox(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  fieldLabel('COURSE'),
+                  SelectBox<String>(
+                    value: _courseId ?? courses.first.id,
+                    items: [
+                      for (final c in courses) DropdownMenuItem(value: c.id, child: Text(c.title)),
+                    ],
+                    onChanged: _pickCourse,
+                  ),
+                  fieldLabel('MODULE'),
+                  if (_loadingModules)
+                    Text('Loading modules...',
+                        style: AppText.sans(size: 11, color: Colors.black54))
+                  else if (_modules.isEmpty)
+                    Text('This course has no modules yet.',
+                        style: AppText.sans(size: 11, color: Colors.black54))
+                  else
+                    SelectBox<String>(
+                      value: _moduleId ?? _modules.first.id,
+                      items: [
+                        for (final m in _modules)
+                          DropdownMenuItem(value: m.id, child: Text(m.title)),
+                      ],
+                      onChanged: (v) => setState(() {
+                        _moduleId = v;
+                        _conversationId = null; // a new module starts a new chat
+                        _messages.clear();
+                        _error = null;
+                      }),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            _conversation(),
+          ],
+        );
+      },
+    );
+  }
+
+  // ----- the messages and the box to write in (both modes) -----
+
+  Widget _conversation() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_messages.isEmpty && !_sending && !_existing)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
             child: Text(
@@ -258,23 +344,43 @@ class _AiChatPageState extends State<AiChatPage> {
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(_error!, style: AppText.sans(size: 11, color: const Color(0xFFB3261E))),
           ),
-        inputField(_input, 'Ask a question about this module', minLines: 1, maxLines: 4),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            primaryButton(
-              label: 'SEND',
-              loading: _sending,
-              onPressed: _moduleId == null ? null : _send,
-            ),
-            const SizedBox(width: 8),
-            if (_messages.isNotEmpty)
-              TextButton(
-                onPressed: _sending ? null : () => setState(_messages.clear),
-                child: Text('CLEAR CHAT', style: AppText.sans(size: 11, color: AppColors.label)),
+        if (_readOnly)
+          Text(
+            'This module no longer exists, so this chat is read only.',
+            style: AppText.sans(size: 11, color: Colors.black54),
+          )
+        else if (_full)
+          Text(
+            'This chat is full ($_maxChatMessages messages). Press NEW CHAT to keep asking.',
+            style: AppText.sans(size: 11, color: Colors.black54),
+          )
+        else ...[
+          inputField(_input, 'Ask a question about this module', minLines: 1, maxLines: 4),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              primaryButton(
+                label: 'SEND',
+                loading: _sending,
+                onPressed: _moduleId == null ? null : _send,
               ),
-          ],
-        ),
+              const SizedBox(width: 8),
+              if (_messages.isNotEmpty)
+                TextButton(
+                  onPressed: _sending ? null : _newChat,
+                  child: Text('NEW CHAT', style: AppText.sans(size: 11, color: AppColors.label)),
+                ),
+            ],
+          ),
+        ],
+        if ((_readOnly || _full) && _messages.isNotEmpty)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: _newChat,
+              child: Text('NEW CHAT', style: AppText.sans(size: 11, color: AppColors.label)),
+            ),
+          ),
         SizedBox(key: _endKey, height: 20),
       ],
     );

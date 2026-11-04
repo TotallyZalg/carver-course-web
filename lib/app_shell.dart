@@ -154,7 +154,8 @@ class _Sidebar extends StatelessWidget {
           icon: Icons.help_outline_rounded,
           label: 'QUIZ',
           iconColor: const Color(0xFFE53935),
-          onTap: () => showSnack(context, 'Coming in the next update'),
+          selected: selected == 'quizzes',
+          onTap: () => _go(context, '/quizzes'),
         ),
       ]);
     }

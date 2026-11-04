@@ -774,7 +774,67 @@ class DashboardOverview {
       );
 }
 
+/// One row of the QUIZ page.
+class QuizListItem {
+  QuizListItem({
+    required this.id,
+    required this.title,
+    required this.kind,
+    required this.courseTitle,
+    required this.state,
+    required this.opensAt,
+    required this.dueAt,
+    required this.maxAttempts,
+    this.attemptsUsed = 0,
+    this.waiting = 0,
+    this.bestScore,
+    this.totalPoints = 0,
+    this.submissionCount = 0,
+    this.needsGrading = 0,
+  });
+
+  final String id;
+  final String title;
+  final String kind;
+  final String courseTitle;
+  final String state; // draft, upcoming, open or closed
+  final DateTime? opensAt;
+  final DateTime? dueAt;
+  final int maxAttempts;
+  // student
+  final int attemptsUsed;
+  final int waiting; // my tries waiting for hand grading
+  final int? bestScore; // best graded try, null if none is graded yet
+  final int totalPoints;
+  // instructor / admin
+  final int submissionCount; // students who submitted
+  final int needsGrading; // tries waiting for hand grading
+
+  factory QuizListItem.fromJson(Map<String, dynamic> j) => QuizListItem(
+        id: (j['id'] ?? '').toString(),
+        title: (j['title'] ?? '').toString(),
+        kind: (j['kind'] ?? 'quiz').toString(),
+        courseTitle: (j['courseTitle'] ?? '').toString(),
+        state: (j['state'] ?? '').toString(),
+        opensAt: DateTime.tryParse((j['opensAt'] ?? '').toString())?.toLocal(),
+        dueAt: DateTime.tryParse((j['dueAt'] ?? '').toString())?.toLocal(),
+        maxAttempts: (j['maxAttempts'] as num?)?.toInt() ?? 1,
+        attemptsUsed: (j['attemptsUsed'] as num?)?.toInt() ?? 0,
+        waiting: (j['waiting'] as num?)?.toInt() ?? 0,
+        bestScore: (j['bestScore'] as num?)?.toInt(),
+        totalPoints: (j['totalPoints'] as num?)?.toInt() ?? 0,
+        submissionCount: (j['submissionCount'] as num?)?.toInt() ?? 0,
+        needsGrading: (j['needsGrading'] as num?)?.toInt() ?? 0,
+      );
+}
+
 class DashboardApi {
+  static Future<List<QuizListItem>> quizzes() async {
+    final data = await ApiService._request('GET', '/dashboard/quizzes') as Map<String, dynamic>;
+    return ((data['items'] as List?) ?? [])
+        .map((q) => QuizListItem.fromJson(q as Map<String, dynamic>))
+        .toList();
+  }
   static Future<DashboardOverview> overview() async {
     final data = await ApiService._request('GET', '/dashboard/overview') as Map<String, dynamic>;
     return DashboardOverview.fromJson(data);
@@ -946,6 +1006,77 @@ class PracticeDetail {
       );
 }
 
+/// One line of the saved chats list.
+class ChatSummary {
+  ChatSummary({
+    required this.id,
+    required this.courseTitle,
+    required this.moduleTitle,
+    required this.title,
+    required this.messageCount,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String courseTitle;
+  final String moduleTitle;
+  final String title; // the first question
+  final int messageCount;
+  final DateTime? updatedAt;
+
+  factory ChatSummary.fromJson(Map<String, dynamic> j) => ChatSummary(
+        id: (j['id'] ?? '').toString(),
+        courseTitle: (j['courseTitle'] ?? '').toString(),
+        moduleTitle: (j['moduleTitle'] ?? '').toString(),
+        title: (j['title'] ?? '').toString(),
+        messageCount: (j['messageCount'] as num?)?.toInt() ?? 0,
+        updatedAt: DateTime.tryParse((j['updatedAt'] ?? '').toString())?.toLocal(),
+      );
+}
+
+class ChatMessageRow {
+  ChatMessageRow({required this.role, required this.text});
+
+  final String role; // 'student' or 'tutor'
+  final String text;
+
+  factory ChatMessageRow.fromJson(Map<String, dynamic> j) =>
+      ChatMessageRow(role: (j['role'] ?? '').toString(), text: (j['text'] ?? '').toString());
+}
+
+class ChatDetail {
+  ChatDetail({
+    required this.id,
+    required this.courseTitle,
+    required this.moduleTitle,
+    required this.moduleId,
+    required this.messages,
+  });
+
+  final String id;
+  final String courseTitle;
+  final String moduleTitle;
+  final String? moduleId; // null = the module was deleted (read only)
+  final List<ChatMessageRow> messages;
+
+  factory ChatDetail.fromJson(Map<String, dynamic> j) => ChatDetail(
+        id: (j['id'] ?? '').toString(),
+        courseTitle: (j['courseTitle'] ?? '').toString(),
+        moduleTitle: (j['moduleTitle'] ?? '').toString(),
+        moduleId: j['moduleId'] as String?,
+        messages: ((j['messages'] as List?) ?? [])
+            .map((m) => ChatMessageRow.fromJson(m as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+class ChatReply {
+  ChatReply({required this.conversationId, required this.reply});
+
+  final String conversationId;
+  final String reply;
+}
+
 class AiApi {
   /// Saves the student's picks (null = unanswered) and the server works out the score.
   static Future<void> finishPractice(String id, List<int?> answers) async {
@@ -965,15 +1096,36 @@ class AiApi {
   static Future<void> deletePractice(String id) async {
     await ApiService._request('DELETE', '/ai/practice/$id');
   }
-  /// [messages] is the chat so far: [{'role': 'student' | 'tutor', 'text': '...'}]. Returns the reply.
-  static Future<String> chat(String moduleId, List<Map<String, String>> messages) async {
+  /// Sends one question. The server saves the chat; pass [conversationId] to continue one.
+  static Future<ChatReply> chat(String moduleId, String text, {String? conversationId}) async {
     final data = await ApiService._request(
       'POST',
       '/ai/chat',
-      body: {'moduleId': moduleId, 'messages': messages},
+      body: {
+        'moduleId': moduleId,
+        'text': text,
+        'conversationId': ?conversationId,
+      },
       timeout: const Duration(seconds: 100),
     ) as Map<String, dynamic>;
-    return (data['reply'] ?? '').toString();
+    return ChatReply(
+      conversationId: (data['conversationId'] ?? '').toString(),
+      reply: (data['reply'] ?? '').toString(),
+    );
+  }
+
+  static Future<List<ChatSummary>> chatHistory() async {
+    final data = await ApiService._request('GET', '/ai/chats') as List;
+    return data.map((c) => ChatSummary.fromJson(c as Map<String, dynamic>)).toList();
+  }
+
+  static Future<ChatDetail> chatDetail(String id) async {
+    final data = await ApiService._request('GET', '/ai/chats/$id') as Map<String, dynamic>;
+    return ChatDetail.fromJson(data);
+  }
+
+  static Future<void> deleteChat(String id) async {
+    await ApiService._request('DELETE', '/ai/chats/$id');
   }
   static Future<PracticeQuiz> practiceQuiz(String moduleId, {int count = 5}) async {
     final data = await ApiService._request(
