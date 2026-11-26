@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'api_service.dart';
 import 'app_shell.dart';
+import 'reset_requests_section.dart';
 import 'theme.dart';
 import 'ui_kit.dart';
 
@@ -62,6 +63,7 @@ class _InstitutionsPageState extends State<InstitutionsPage> {
               ],
             ),
             const SizedBox(height: 14),
+            const ResetRequestsSection(),
             FutureBuilder<List<Institution>>(
               future: _future,
               builder: (context, snapshot) {

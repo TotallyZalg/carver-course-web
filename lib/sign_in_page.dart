@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'api_service.dart';
+import 'forgot_password_dialog.dart';
 import 'theme.dart';
 
 class SignInPage extends StatefulWidget {
@@ -132,7 +133,16 @@ class _SignInPageState extends State<SignInPage> {
                   : Text('SIGN IN', style: AppText.sans(size: 11, color: Colors.white)),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
+          Center(
+            child: TextButton(
+              onPressed: () =>
+                  showForgotPasswordDialog(context, email: _email.text.trim()),
+              child: Text('Forgot password?',
+                  style: AppText.sans(size: 11, color: AppColors.darkBrown)),
+            ),
+          ),
+          const SizedBox(height: 4),
           Center(
             child: Text("Accounts are created by your institution's admin.",
                 style: AppText.sans(size: 11, color: AppColors.darkBrown)),

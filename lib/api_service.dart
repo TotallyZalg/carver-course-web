@@ -262,9 +262,13 @@ class QuizSummary {
 // ---------- The API calls ----------
 
 class ApiService {
-  // Web and desktop reach the backend at localhost.
-  // The Android emulator reaches your computer through 10.0.2.2 instead.
+  // The hosted backend address is given when the app is built or run:
+  //   flutter run -d chrome --dart-define=API_URL=https://YOUR-NAME.onrender.com/api
+  // Without it, web and desktop use localhost and the Android emulator uses 10.0.2.2.
+  static const String _hostedUrl = String.fromEnvironment('API_URL');
+
   static String get baseUrl {
+    if (_hostedUrl.isNotEmpty) return _hostedUrl;
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       return 'http://10.0.2.2:5000/api';
     }
@@ -278,7 +282,7 @@ class ApiService {
     String path, {
     Map<String, dynamic>? body,
     bool auth = true,
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 60),
     bool signOutOn401 = true,
   }) async {
     final request = http.Request(method, Uri.parse('$baseUrl$path'));
@@ -293,7 +297,8 @@ class ApiService {
       final streamed = await request.send().timeout(timeout);
       res = await http.Response.fromStream(streamed);
     } catch (_) {
-      throw ApiException("Can't reach the server. Is the backend running?");
+      throw ApiException(
+          "Can't reach the server. If it was idle it may be waking up, so wait a minute and try again.");
     }
 
     dynamic data;
@@ -329,7 +334,7 @@ class ApiService {
         '/auth/login',
         body: {'email': email, 'password': password},
         auth: false,
-        timeout: const Duration(seconds: 10),
+        timeout: const Duration(seconds: 60),
       ) as Map<String, dynamic>;
       Session.token = data['token'] as String;
       Session.applyUser(data);
@@ -844,6 +849,75 @@ class DashboardApi {
     return ((data['tasks'] as List?) ?? [])
         .map((t) => DashboardTask.fromJson(t as Map<String, dynamic>))
         .toList();
+  }
+}
+
+// ---------- Password reset ----------
+
+class ResetRequest {
+  ResetRequest({
+    required this.id,
+    required this.name,
+    required this.email,
+    required this.role,
+    required this.requestedAt,
+  });
+
+  final String id;
+  final String name;
+  final String email;
+  final String role;
+  final DateTime? requestedAt; // local time zone
+
+  factory ResetRequest.fromJson(Map<String, dynamic> j) => ResetRequest(
+        id: (j['id'] ?? '').toString(),
+        name: (j['name'] ?? '').toString(),
+        email: (j['email'] ?? '').toString(),
+        role: (j['role'] ?? '').toString(),
+        requestedAt: DateTime.tryParse((j['requestedAt'] ?? '').toString())?.toLocal(),
+      );
+}
+
+/// What the admin gets back when approving: the temporary password, shown once.
+class ResetApproval {
+  ResetApproval({required this.name, required this.email, required this.tempPassword});
+
+  final String name;
+  final String email;
+  final String tempPassword;
+
+  factory ResetApproval.fromJson(Map<String, dynamic> j) => ResetApproval(
+        name: (j['name'] ?? '').toString(),
+        email: (j['email'] ?? '').toString(),
+        tempPassword: (j['tempPassword'] ?? '').toString(),
+      );
+}
+
+class PasswordResetApi {
+  /// Public (no sign-in). Returns the server's message, the same for any email.
+  static Future<String> request(String email) async {
+    final data = await ApiService._request(
+      'POST',
+      '/password-reset/request',
+      body: {'email': email},
+      auth: false,
+    ) as Map<String, dynamic>;
+    return (data['message'] ?? '').toString();
+  }
+
+  static Future<List<ResetRequest>> list() async {
+    final data = await ApiService._request('GET', '/password-reset') as List;
+    return data.map((r) => ResetRequest.fromJson(r as Map<String, dynamic>)).toList();
+  }
+
+  static Future<ResetApproval> approve(String id) async {
+    final data = await ApiService._request('POST', '/password-reset/$id/approve')
+        as Map<String, dynamic>;
+    return ResetApproval.fromJson(data);
+  }
+
+  static Future<void> deny(String id) async {
+    await ApiService._request('POST', '/password-reset/$id/deny');
   }
 }
 
