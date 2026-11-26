@@ -581,6 +581,14 @@ class _CoursePageState extends State<CoursePage> {
                     children: [
                       Text(item.title, style: AppText.sans(size: 13, color: Colors.black87)),
                       _kindTag(item.kind),
+                      if (by.isNotEmpty)
+                        Tooltip(
+                          message: item.postedByName ?? by,
+                          child: _tag('POSTED BY $by', filled: false),
+                        ),
+                      if (_isStaff)
+                        _tag(_stateLabel(item.state),
+                            filled: item.state == 'open' || item.state == 'upcoming'),
                     ],
                   ),
                   Text('$questions · $progress',
@@ -600,15 +608,7 @@ class _CoursePageState extends State<CoursePage> {
                 onPressed: () => openPdf(context, item.fileId!),
                 icon: const Icon(Icons.picture_as_pdf_outlined, color: AppColors.label),
               ),
-            if (by.isNotEmpty)
-              Tooltip(
-                message: item.postedByName ?? by,
-                child: _tag('POSTED BY $by', filled: false),
-              ),
             if (_isStaff) ...[
-              const SizedBox(width: 6),
-              _tag(_stateLabel(item.state),
-                  filled: item.state == 'open' || item.state == 'upcoming'),
               PopupMenuButton<String>(
                 tooltip: 'Options',
                 icon: const Icon(Icons.more_vert_rounded, size: 18, color: AppColors.label),

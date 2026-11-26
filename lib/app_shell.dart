@@ -4,6 +4,9 @@ import 'api_service.dart';
 import 'theme.dart';
 import 'ui_kit.dart';
 
+/// Below this width (phones) the sidebar becomes a slide-out menu.
+const double kCompactWidth = 700;
+
 /// Asks "Are you sure?" and only then signs out.
 Future<void> confirmSignOut(BuildContext context) async {
   final ok = await confirmDialog(
@@ -17,11 +20,40 @@ Future<void> confirmSignOut(BuildContext context) async {
   navigatorKey.currentState?.pushNamedAndRemoveUntil('/', (_) => false);
 }
 
+/// One button of the menu (used by the desktop sidebar and the phone drawer).
+class _NavEntry {
+  const _NavEntry(this.key, this.route, this.icon, this.label, {this.iconColor});
+  final String key; // matches AppShell.selected
+  final String route;
+  final IconData icon;
+  final String label;
+  final Color? iconColor;
+}
+
+List<_NavEntry> _navEntries() {
+  final role = Session.role;
+  if (role == 'owner') {
+    return [
+      _NavEntry('institutions', '/institutions', Icons.apartment_rounded, 'INSTITUTIONS'),
+    ];
+  }
+  return [
+    _NavEntry('home', '/dashboard', Icons.home_rounded, 'HOME'),
+    _NavEntry('courses', '/courses', Icons.menu_book_rounded, 'COURSES'),
+    if (role == 'admin')
+      _NavEntry('users', '/users', Icons.people_alt_rounded, 'USERS'),
+    if (role == 'student')
+      _NavEntry('ai', '/ai', Icons.smart_toy_rounded, 'AI'),
+    _NavEntry('quizzes', '/quizzes', Icons.help_outline_rounded, 'QUIZ',
+        iconColor: const Color(0xFFE53935)),
+  ];
+}
+
 /// Top bar + sidebar around a page. Also the login guard for every page that uses it.
 class AppShell extends StatelessWidget {
   const AppShell({super.key, required this.selected, required this.body});
 
-  final String selected; // 'home', 'courses' or 'users'
+  final String selected; // 'home', 'courses', 'users', ...
   final Widget body;
 
   @override
@@ -37,13 +69,34 @@ class AppShell extends StatelessWidget {
       return const Scaffold(backgroundColor: AppColors.darkBrown);
     }
 
-        // The owner only has the institutions page
+    // The owner only has the institutions page
     if (Session.role == 'owner' && selected != 'institutions') {
       WidgetsBinding.instance.addPostFrameCallback((_) =>
           navigatorKey.currentState?.pushNamedAndRemoveUntil('/institutions', (_) => false));
       return const Scaffold(backgroundColor: AppColors.darkBrown);
     }
 
+    final compact = MediaQuery.of(context).size.width < kCompactWidth;
+
+    // Phone: slide-out menu (drawer), Sign Out lives inside it
+    if (compact) {
+      return Scaffold(
+        backgroundColor: AppColors.darkBrown,
+        drawer: _NavDrawer(
+          selected: selected,
+          pageContext: context,
+          pageRoute: ModalRoute.of(context)?.settings.name,
+        ),
+        body: Column(
+          children: [
+            const _CompactTopBar(),
+            Expanded(child: body),
+          ],
+        ),
+      );
+    }
+
+    // Desktop: top bar + fixed sidebar (as before)
     return Scaffold(
       backgroundColor: AppColors.darkBrown,
       body: Column(
@@ -59,6 +112,118 @@ class AppShell extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Phone top bar: menu button + title.
+class _CompactTopBar extends StatelessWidget {
+  const _CompactTopBar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Builder(
+      builder: (ctx) => Container(
+        height: 52,
+        color: AppColors.darkBrown,
+        padding: const EdgeInsets.only(right: 12),
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Menu',
+              icon: const Icon(Icons.menu_rounded, color: AppColors.cream),
+              onPressed: () => Scaffold.of(ctx).openDrawer(),
+            ),
+            Expanded(
+              child: Text(
+                'CARVER - COURSE',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppText.serif(size: 18, color: AppColors.cream, spacing: 0.5),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Phone menu: name, the same buttons as the sidebar, and Sign Out.
+class _NavDrawer extends StatelessWidget {
+  const _NavDrawer({
+    required this.selected,
+    required this.pageContext,
+    required this.pageRoute,
+  });
+
+  final String selected;
+  final BuildContext pageContext; // the page behind the drawer
+  final String? pageRoute;
+
+  @override
+  Widget build(BuildContext context) {
+    return Drawer(
+      backgroundColor: AppColors.sidebar,
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(Session.name ?? '',
+                      style: AppText.serif(size: 18, color: AppColors.cream)),
+                  const SizedBox(height: 4),
+                  Text((Session.role ?? '').toUpperCase(),
+                      style: AppText.sans(size: 11, color: const Color(0xFFE8C9A0))),
+                ],
+              ),
+            ),
+            const Divider(color: Color(0x33FFFFFF), height: 1),
+            Expanded(
+              child: ListView(
+                children: [
+                  for (final e in _navEntries())
+                    ListTile(
+                      leading: Icon(e.icon,
+                          size: 28, color: e.iconColor ?? const Color(0xFFE8C9A0)),
+                      title: Text(
+                        e.label,
+                        style: AppText.sans(
+                          size: 13,
+                          color: selected == e.key
+                              ? const Color(0xFFFFD58A)
+                              : AppColors.cream,
+                        ),
+                      ),
+                      onTap: () {
+                        Navigator.of(context).pop(); // close the drawer first
+                        if (pageRoute != e.route) {
+                          Navigator.of(pageContext).pushReplacementNamed(e.route);
+                        }
+                      },
+                    ),
+                ],
+              ),
+            ),
+            const Divider(color: Color(0x33FFFFFF), height: 1),
+            ListTile(
+              leading: const Icon(Icons.logout_rounded,
+                  size: 28, color: Color(0xFFE8C9A0)),
+              title: Text('SIGN OUT',
+                  style: AppText.sans(size: 13, color: AppColors.cream)),
+              onTap: () {
+                Navigator.of(context).pop();
+                confirmSignOut(pageContext);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
     );
   }
@@ -112,53 +277,16 @@ class _Sidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final role = Session.role;
-    final items = <Widget>[];
-
-    if (role == 'owner') {
-      items.add(_NavItem(
-        icon: Icons.apartment_rounded,
-        label: 'INSTITUTIONS',
-        selected: selected == 'institutions',
-        onTap: () => _go(context, '/institutions'),
-      ));
-    } else {
-      items.addAll([
+    final items = <Widget>[
+      for (final e in _navEntries())
         _NavItem(
-          icon: Icons.home_rounded,
-          label: 'HOME',
-          selected: selected == 'home',
-          onTap: () => _go(context, '/dashboard'),
+          icon: e.icon,
+          label: e.label,
+          iconColor: e.iconColor,
+          selected: selected == e.key,
+          onTap: () => _go(context, e.route),
         ),
-        _NavItem(
-          icon: Icons.menu_book_rounded,
-          label: 'COURSES',
-          selected: selected == 'courses',
-          onTap: () => _go(context, '/courses'),
-        ),
-        if (role == 'admin')
-          _NavItem(
-            icon: Icons.people_alt_rounded,
-            label: 'USERS',
-            selected: selected == 'users',
-            onTap: () => _go(context, '/users'),
-          ),
-        if (role == 'student')
-          _NavItem(
-            icon: Icons.smart_toy_rounded,
-            label: 'AI',
-            selected: selected == 'ai',
-            onTap: () => _go(context, '/ai'),
-          ),
-        _NavItem(
-          icon: Icons.help_outline_rounded,
-          label: 'QUIZ',
-          iconColor: const Color(0xFFE53935),
-          selected: selected == 'quizzes',
-          onTap: () => _go(context, '/quizzes'),
-        ),
-      ]);
-    }
+    ];
 
     return Container(
       width: 90,
@@ -169,7 +297,7 @@ class _Sidebar extends StatelessWidget {
   }
 }
 
-  class _NavItem extends StatelessWidget {
+class _NavItem extends StatelessWidget {
   const _NavItem({
     required this.icon,
     required this.label,
