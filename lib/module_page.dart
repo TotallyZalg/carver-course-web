@@ -98,6 +98,17 @@ class _ModulePageState extends State<ModulePage> {
                     style: AppText.sans(size: 11, color: AppColors.label)),
               ),
             ),
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.icon(
+                onPressed: () => Navigator.pushNamed(context, '/pdf/${module.fileId}'),
+                icon: const Icon(Icons.menu_book_outlined, size: 18),
+                label: Text('READ IN APP (TEST)',
+                    style: AppText.sans(size: 11, color: Colors.white)),
+                style: FilledButton.styleFrom(backgroundColor: AppColors.darkBrown),
+              ),
+            ),
           ],
           const SizedBox(height: 12),
           if (module.content.trim().isEmpty)

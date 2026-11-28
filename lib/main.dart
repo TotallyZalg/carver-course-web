@@ -12,6 +12,7 @@ import 'ai_page.dart';
 import 'grade_page.dart';
 import 'institutions_page.dart';
 import 'module_page.dart';
+import 'pdf_viewer_page.dart';
 import 'quiz_editor_page.dart';
 import 'quiz_page.dart';
 import 'quiz_review_page.dart';
@@ -90,6 +91,8 @@ Route<dynamic> _route(RouteSettings settings) {
         page = AiChatPage(conversationId: segments[1]);
       case 'quiz-new':
         page = QuizEditorPage(courseId: segments[1]);
+      case 'pdf':
+        page = PdfViewerPage(fileId: segments[1]);
     }
   } else if (segments.length == 3) {
     switch (segments[0]) {
